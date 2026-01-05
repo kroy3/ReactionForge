@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img src="https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg" alt="arXiv"></a>
   <a href="https://chemrxiv.org/engage/chemrxiv/article-details/XXXXXXXXX"><img src="https://img.shields.io/badge/ChemRxiv-Preprint-orange" alt="ChemRxiv"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
   <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.0+-ee4c2c?logo=pytorch&logoColor=white" alt="PyTorch"></a>
@@ -266,7 +265,7 @@ If you use ReactionForge in your research, please cite our paper:
 ```bibtex
 @article{roy2025reactionforge,
   title={ReactionForge: Temporal Graph Networks Surpass State-of-the-Art in Suzuki-Miyaura Yield Prediction},
-  author={Roy, Kushal Raj and Das, Susen and Gunaratne, Preethi},
+  author={Roy, Kushal Raj},
   journal={ChemRxiv},
   year={2025},
   doi={10.XXXX/chemrxiv.XXXXXXX}
@@ -293,7 +292,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 💬 Contact
 
 **Kushal Raj Roy**  
-Research Assistant, Gunaratne Lab  
 University of Houston  
 📧 kroy@uh.edu  
 🔗 [LinkedIn](https://linkedin.com/in/kushalrajroy) | [Google Scholar](https://scholar.google.com)
