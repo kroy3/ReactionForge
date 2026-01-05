@@ -1,7 +1,7 @@
 # ReactionForge: Temporal Graph Network for Reaction Yield Prediction
 
 <p align="center">
-  <img src="figures/reactionforge_logo.png" alt="ReactionForge Logo" width="200"/>
+  <img src="figures/logo.png" alt="ReactionForge Logo" width="200"/>
 </p>
 
 <p align="center">
