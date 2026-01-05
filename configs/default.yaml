@@ -1,0 +1,7 @@
+# Default configuration
+model:
+  hidden_dim: 128
+  num_wln_layers: 3
+training:
+  epochs: 200
+  batch_size: 64

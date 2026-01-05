@@ -1,0 +1,29 @@
+name: reactionforge
+channels:
+  - conda-forge
+  - pytorch
+  - pyg
+dependencies:
+  - python=3.10
+  - pytorch=2.0.1
+  - pytorch-cuda=11.8
+  - pyg
+  - rdkit>=2023.3.1
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - scikit-learn>=1.3.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+  - jupyter
+  - notebook
+  - pytest
+  - pip
+  - pip:
+    - torch-geometric
+    - torch-scatter
+    - torch-sparse
+    - mordred
+    - tensorboard
+    - optuna
+    - tqdm
+    - pyyaml

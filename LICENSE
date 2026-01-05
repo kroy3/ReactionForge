@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Kushal Raj Roy
+Copyright (c) 2025 Kushal Raj Roy, University of Houston
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Citation:
+If you use this software in your research, please cite:
+
+Roy, K.R., Das, S., and Gunaratne, P.H. (2025). "ReactionForge: Temporal 
+Graph Networks with Cross-Attention and Evidential Learning Surpass 
+State-of-the-Art in Suzuki-Miyaura Yield Prediction", ChemRxiv.
+
+Related work:
+- Roy, K.R. (2025) "Cross-Geometry Pretraining for Equivariant Neural 
+  Networks", ChemRxiv. doi:10.26434/chemrxiv-2025-pk8gk
+
+- Roy, K.R. (2025) "Machine Learning-Guided Catalyst Selection Reveals 
+  Nickel's Advantages Over Palladium", ChemRxiv. 
+  doi:10.26434/chemrxiv-2025-9tpkv
