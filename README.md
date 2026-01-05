@@ -300,7 +300,7 @@ University of Houston
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=yourusername/ReactionForge&type=Date)](https://star-history.com/#yourusername/ReactionForge&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=yourusername/ReactionForge&type=Date)](https://star-history.com/#kroy3/ReactionForge&Date)
 
 ---
 
