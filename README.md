@@ -261,11 +261,12 @@ Full documentation is available at **[reactionforge.readthedocs.io](https://reac
 
 ### Key Topics
 
-- [Architecture Details](docs/architecture.md) - Deep dive into model components
-- [Data Preparation](docs/data_preparation.md) - How to format your own datasets
-- [Training Guide](docs/training.md) - Best practices for training
-- [API Reference](docs/api.md) - Complete API documentation
-- [FAQ](docs/faq.md) - Frequently asked questions
+- [Project Status](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#2-project-status-read-this-first) - What is and isn't implemented
+- [Data Preparation](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#6-preparing-your-data) - How to format your own datasets
+- [Training, Prediction and Evaluation](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#7-quick-start-train-and-predict) - Command-line workflow
+- [Uncertainty Calibration](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#81-uncertainty-calibration) - How to read the error bars
+- [API Reference](https://reactionforge.readthedocs.io/en/latest/api.html) - Python API generated from the docstrings
+- [Troubleshooting](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#12-troubleshooting) - Common errors and fixes
 
 ---
 
