@@ -315,7 +315,14 @@ class ReactionForge(nn.Module):
         """
         x = self.atom_encoder(data.x)
         edge_index = data.edge_index
-        edge_attr = data.edge_attr if hasattr(data, 'edge_attr') else None
+        edge_attr = getattr(data, 'edge_attr', None)
+
+        # WLN layers dispatch on an integer bond type per edge
+        # (0=single, 1=double, 2=triple, 3=aromatic). The data pipeline
+        # stores bonds as one-hot feature rows whose first four columns are
+        # those types, so reduce them to an index here.
+        if edge_attr is not None and edge_attr.dim() == 2:
+            edge_attr = edge_attr[:, :4].argmax(dim=1)
         
         # WLN message passing
         for wln in self.wln_layers:
@@ -372,6 +379,7 @@ class ReactionForge(nn.Module):
         
         # Temporal encoding and memory update
         if timestamps is not None:
+            timestamps = timestamps.view(-1)  # accept (batch,) or (batch, 1)
             temporal_enc = self.temporal_encoder(timestamps)
             memory_input = torch.cat([cross_attn, temporal_enc], dim=-1).unsqueeze(1)
             memory_out, h_new = self.temporal_memory(memory_input, h_prev)

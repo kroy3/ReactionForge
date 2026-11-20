@@ -192,7 +192,20 @@ class SuzukiMiyauraDataset(Dataset):
     """
     
     def __init__(self, csv_path: str, transform=None, pre_transform=None):
-        self.df = pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path)
+
+        # Rows whose SMILES RDKit cannot parse would make get() return None,
+        # which crashes batching. Drop them up front and say how many.
+        valid = df.apply(
+            lambda r: Chem.MolFromSmiles(str(r['reactant_smiles'])) is not None
+            and Chem.MolFromSmiles(str(r['product_smiles'])) is not None,
+            axis=1,
+        )
+        if (~valid).any():
+            print(f"⚠️  Skipping {(~valid).sum()} of {len(df)} rows with "
+                  f"invalid reactant/product SMILES in {csv_path}")
+        self.df = df[valid].reset_index(drop=True)
+
         super().__init__(None, transform, pre_transform)
         
     def len(self):

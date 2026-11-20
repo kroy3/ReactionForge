@@ -2,79 +2,104 @@
 Training Loop with Evidential Loss
 ===================================
 Complete training orchestration for ReactionForge.
+
+Batches are the dicts produced by ``SuzukiMiyauraDataset`` and collated by
+``torch_geometric.loader.DataLoader``:
+
+    {'reactant': Batch, 'product': Batch, 'conditions': (B, C),
+     'yield': (B, 1) on a 0-1 scale, 'selectivity': (B, 1), 'timestamp': (B, 1)}
 """
 
 import torch
-import torch.nn as nn
 from tqdm import tqdm
+
+from src.models.reactionforge import evidential_loss
+from src.training.metrics import calculate_metrics
 
 
 class ReactionForgeTrainer:
     """Trainer class for ReactionForge model"""
-    
-    def __init__(self, model, optimizer, device='cuda'):
+
+    def __init__(self, model, optimizer, device='cuda', lambda_reg=0.01,
+                 use_timestamps=True, max_grad_norm=1.0):
+        """
+        Args:
+            model: ReactionForge instance
+            optimizer: torch optimizer over ``model.parameters()``
+            device: device to train on
+            lambda_reg: weight of the evidential regulariser
+            use_timestamps: pass reaction timestamps to the model (enables
+                temporal memory); set False to train without it
+            max_grad_norm: gradient clipping threshold
+        """
         self.model = model
         self.optimizer = optimizer
         self.device = device
+        self.lambda_reg = lambda_reg
+        self.use_timestamps = use_timestamps
+        self.max_grad_norm = max_grad_norm
         self.model.to(device)
-        
+
+    def _forward(self, batch):
+        """Move a batch to the device, run the model, and compute the loss."""
+        batch = {k: v.to(self.device) if hasattr(v, 'to') else v
+                 for k, v in batch.items()}
+
+        timestamps = batch['timestamp'] if self.use_timestamps else None
+        output = self.model(batch['reactant'], batch['product'],
+                            batch['conditions'], timestamps)
+
+        gamma, nu, alpha, beta = output['yield_params']
+        target = batch['yield'].view(-1, 1)
+        loss = evidential_loss(gamma, nu, alpha, beta, target, self.lambda_reg)
+        return output, target, loss
+
     def train_epoch(self, train_loader):
-        """Train for one epoch"""
+        """Train for one epoch. Returns the mean training loss."""
         self.model.train()
-        total_loss = 0
-        
+        total_loss = 0.0
+
         pbar = tqdm(train_loader, desc='Training')
         for batch in pbar:
-            # Move batch to device
-            batch = {k: v.to(self.device) if torch.is_tensor(v) else v 
-                    for k, v in batch.items()}
-            
-            # Forward pass
-            output = self.model(batch)
-            loss = output['loss']
-            
-            # Backward pass
+            _, _, loss = self._forward(batch)
+
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(),
+                                           max_norm=self.max_grad_norm)
             self.optimizer.step()
-            
+
             total_loss += loss.item()
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
-        
+
         return total_loss / len(train_loader)
-    
+
     def evaluate(self, val_loader):
-        """Evaluate on validation set"""
+        """
+        Evaluate on a validation or test set.
+
+        Returns:
+            dict with 'loss', 'r2', and 'rmse' / 'mae' in yield percentage points.
+        """
         self.model.eval()
-        total_loss = 0
-        predictions = []
-        targets = []
-        
+        total_loss = 0.0
+        predictions, targets = [], []
+
         with torch.no_grad():
             for batch in tqdm(val_loader, desc='Evaluating'):
-                batch = {k: v.to(self.device) if torch.is_tensor(v) else v 
-                        for k, v in batch.items()}
-                
-                output = self.model(batch)
-                loss = output['loss']
-                
+                output, target, loss = self._forward(batch)
                 total_loss += loss.item()
-                predictions.extend(output['yield_mean'].cpu().numpy())
-                targets.extend(batch['yield'].cpu().numpy())
-        
-        # Calculate metrics
-        import numpy as np
-        predictions = np.array(predictions)
-        targets = np.array(targets)
-        
-        r2 = 1 - np.sum((targets - predictions)**2) / np.sum((targets - targets.mean())**2)
-        rmse = np.sqrt(np.mean((targets - predictions)**2))
-        mae = np.mean(np.abs(targets - predictions))
-        
+                predictions.append(output['yield_mean'].view(-1).cpu())
+                targets.append(target.view(-1).cpu())
+
+        # Yields are stored on a 0-1 scale; report errors in percentage points.
+        predictions = torch.cat(predictions).numpy() * 100
+        targets = torch.cat(targets).numpy() * 100
+        metrics = calculate_metrics(targets, predictions)
+
         return {
             'loss': total_loss / len(val_loader),
-            'r2': r2,
-            'rmse': rmse,
-            'mae': mae
+            'r2': float(metrics['r2']),
+            'rmse': float(metrics['rmse']),
+            'mae': float(metrics['mae']),
         }

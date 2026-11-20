@@ -55,20 +55,20 @@ The README describes a full pipeline: command-line training, evaluation, batch p
 
 | Component | Status | Notes |
 |---|---|---|
-| Model (`src/models/reactionforge.py`) | ✅ Works | Bond features must be converted to type indices first. See [§7](#7-quick-start-train-and-predict). |
+| Model (`src/models/reactionforge.py`) | ✅ Works | |
 | Dataset loader (`src/data/dataset.py`) | ✅ Works | Produces 150-dim atom features and 6-dim one-hot bond features |
 | Synthetic data generator | ✅ Works | `generate_synthetic_dataset()` |
 | Evidential loss function | ✅ Works | `evidential_loss()` |
 | Metrics, uncertainty, plotting utilities | ✅ Work | Plain NumPy/matplotlib functions |
-| `scripts/train.py` | ❌ Crashes | The trainer calls `model(batch)`, which doesn't match the model's `forward()` signature. The script also hard-codes `node_feat_dim=154`, but the data has 150. |
-| `src/training/trainer.py` (`ReactionForgeTrainer`) | ❌ Incompatible with the model | Expects the model to return a `'loss'` key |
+| `scripts/train.py` | ✅ Works | Train / validate / test with early stopping and checkpointing. See [§7.1](#71-train-from-the-command-line). |
+| `src/training/trainer.py` (`ReactionForgeTrainer`) | ✅ Works | Used by `scripts/train.py`; also usable from Python ([§7.3](#73-train-from-python)) |
 | `scripts/evaluate.py`, `scripts/predict.py` | ⚠️ Stubs | They load inputs, then stop at `# Implementation continues...` |
 | `scripts/hyperopt.py` | ⚠️ Stub | The objective returns a fixed `0.95` and trains nothing |
 | Pretrained checkpoint (`checkpoints/`) | ❌ Not included | `ReactionForge.load_from_checkpoint()` from the README doesn't exist |
 | `scripts/run_benchmarks.sh`, `scripts/ablation_study.py`, `docs/*` pages, readthedocs site | ❌ Not in the repository | Referenced in the README only |
 | `configs/*.yaml` | ⚠️ Not read by any code | `ablation.yaml` and `transfer_learning.yaml` contain only comments |
 | Notebooks (`notebooks/`) | ⚠️ Skeletons | Imports and headings only |
-| Unit tests (`tests/`) | ⚠️ 2 of 7 pass | See [§11](#11-running-the-test-suite) |
+| Unit tests (`tests/`) | ⚠️ 4 of 9 pass | See [§11](#11-running-the-test-suite) |
 
 **About the published numbers.** The performance table in the README (R² = 0.968, RMSE = 5.12 %, and so on) can't be reproduced from this repository alone. The benchmark dataset, training scripts, and weights behind those numbers aren't included. Treat them as claims from the accompanying paper, not as something this code demonstrates.
 
@@ -167,7 +167,7 @@ ReactionForge/
 │   │   ├── featurization.py  Alternative 144-dim featuriser (not used by dataset.py)
 │   │   └── augmentation.py   SMILES enumeration, condition noise
 │   ├── training/
-│   │   ├── trainer.py        Trainer class (incompatible with model; see §2)
+│   │   ├── trainer.py        Training loop used by scripts/train.py
 │   │   ├── callbacks.py      EarlyStopping, ModelCheckpoint
 │   │   └── metrics.py        R², RMSE, MAE, calibration error
 │   └── utils/
@@ -182,7 +182,7 @@ ReactionForge/
 └── *.py, models/, training/, utils/   ← duplicate copies of src/ files
 ```
 
-**Duplicate files.** The repository root and the top-level `models/`, `training/`, and `utils/` folders contain byte-for-byte copies of files in `src/`. They're leftovers from upload. **Always import from `src.`**. Editing a root-level copy won't affect anything that imports from `src`.
+**Duplicate files.** The repository root and the top-level `models/`, `training/`, and `utils/` folders contain older copies of files in `src/`. They're leftovers from upload, aren't imported by anything, and don't include later fixes. **Always import from `src.`**. Editing a root-level copy won't affect anything.
 
 ---
 
@@ -223,7 +223,7 @@ c1ccc(Cl)cc1,c1ccc(-c2ccccc2)cc1,110,24,5,48.3
 
 ### 6.3 Validate your file before training
 
-Invalid SMILES make the loader return `None`, and batching then fails with a confusing error. Check up front:
+`SuzukiMiyauraDataset` drops rows whose SMILES RDKit can't parse and prints how many it dropped. If more than a handful are dropped, find and fix them rather than lose the data:
 
 ```python
 import pandas as pd
@@ -233,7 +233,7 @@ df = pd.read_csv("my_reactions.csv")
 bad = df[df.apply(lambda r: Chem.MolFromSmiles(r.reactant_smiles) is None
                             or Chem.MolFromSmiles(r.product_smiles) is None, axis=1)]
 print(f"{len(bad)} invalid rows")
-df.drop(bad.index).to_csv("my_reactions_clean.csv", index=False)
+print(bad[["reactant_smiles", "product_smiles"]])
 ```
 
 ### 6.4 No data yet? Generate a synthetic set
@@ -249,67 +249,92 @@ This creates rule-based fake reactions (iodide > bromide > chloride, small bonus
 
 ## 7. Quick Start: Train and Predict
 
-Because `scripts/train.py` doesn't run (see [§2](#2-project-status-read-this-first)), use the script below instead. It was run end-to-end on CPU against this repository and completes in about a minute.
+### 7.1 Train from the command line
 
-Save it as `quickstart.py` in the repository root and run `python quickstart.py`.
+Run from the repository root (or give the full path to the script):
+
+```bash
+python scripts/train.py \
+    --data_path my_reactions.csv \
+    --output_dir checkpoints/experiment_001 \
+    --epochs 200
+```
+
+No data yet? Generate a synthetic set first ([§6.4](#64-no-data-yet-generate-a-synthetic-set)).
+
+What the script does:
+
+1. Loads the CSV, skipping any rows with unparseable SMILES (it prints how many it skipped).
+2. Splits the data 70 / 15 / 15 into train / validation / test. The split is reproducible for a given `--seed`.
+3. Trains, printing validation R², RMSE and MAE (in yield percentage points) after each epoch.
+4. Saves the best model by validation R² to `<output_dir>/best_model.pt`, and stops early once validation R² hasn't improved for `--patience` epochs.
+5. Reloads the best model and reports its scores on the held-out test set.
+
+Excerpt from a real run on 2 000 synthetic reactions (CPU, about 2 minutes):
+
+```
+Split: 1400 train, 300 val, 300 test
+Model parameters: 1,028,873
+...
+Epoch 26/40
+Val R²: 0.4830, RMSE: 9.60%, MAE: 7.89%
+Early stopping at epoch 26
+============================================================
+FINAL TEST EVALUATION
+============================================================
+Test R²: 0.3370
+Test RMSE: 10.74%
+Test MAE: 8.65%
+```
+
+The synthetic generator adds random noise with a standard deviation of 10 yield points, so an RMSE near 10 % is about as good as any model can do on that data. Don't compare these numbers with the paper's.
+
+**Command-line options**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--data_path` | *(required)* | Reaction CSV ([§6](#6-preparing-your-data)) |
+| `--output_dir` | `checkpoints/` | Where `best_model.pt` is written (created if missing) |
+| `--epochs` | 200 | Maximum number of passes over the training data |
+| `--patience` | 20 | Epochs without validation improvement before stopping early |
+| `--batch_size` | 64 | Reactions per training step |
+| `--learning_rate` | 1e-3 | Adam learning rate (halved automatically when validation R² stalls) |
+| `--weight_decay` | 1e-5 | L2 regularisation |
+| `--hidden_dim` | 128 | Model width ([§9](#9-configuring-the-model)) |
+| `--num_wln_layers` | 3 | Message-passing depth |
+| `--num_heads` | 8 | Attention heads (must divide `--hidden_dim`) |
+| `--dropout` | 0.2 | Dropout rate |
+| `--evidential_lambda` | 0.01 | Weight of the uncertainty regulariser in the loss |
+| `--no_temporal_memory` | off | Ignore the `timestamp` column (disables the GRU memory) |
+| `--num_workers` | 0 | Background processes for data loading |
+| `--seed` | 42 | Random seed for weights and the data split |
+
+**Why the training loss can be negative.** The evidential loss is a negative log-likelihood, which can legitimately go below zero. Judge training by validation R² and RMSE, not by the sign of the loss.
+
+### 7.2 Predict a single reaction
+
+The checkpoint stores the settings the model was built with (`model_config`), so you can rebuild it without remembering them:
 
 ```python
 import torch
 import pandas as pd
-from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 
-from src.models.reactionforge import ReactionForge, evidential_loss
-from src.data.dataset import (SuzukiMiyauraDataset, generate_synthetic_dataset,
-                              smiles_to_graph, extract_reaction_conditions)
+from src.models.reactionforge import ReactionForge
+from src.data.dataset import smiles_to_graph, extract_reaction_conditions
 
-
-def to_bond_type_index(graph):
-    """Convert one-hot bond features (N, 6) into bond-type indices (N,)
-    as expected by the model's WLN layers: 0=single 1=double 2=triple 3=aromatic."""
-    graph = graph.clone()
-    graph.edge_attr = graph.edge_attr[:, :4].argmax(dim=1)
-    return graph
-
-
-# 1. Data  (replace with your own CSV, e.g. "my_reactions_clean.csv")
-generate_synthetic_dataset(num_samples=500, output_path="synthetic.csv")
-dataset = SuzukiMiyauraDataset("synthetic.csv")
-loader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-# 2. Model (150 = atom feature size produced by src/data/dataset.py)
-model = ReactionForge(node_feat_dim=150, edge_feat_dim=6, condition_dim=10)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-
-# 3. Train
-for epoch in range(5):
-    model.train()
-    total = 0.0
-    for batch in loader:
-        out = model(to_bond_type_index(batch["reactant"]),
-                    to_bond_type_index(batch["product"]),
-                    batch["conditions"],
-                    batch["timestamp"].view(-1))
-        gamma, nu, alpha, beta = out["yield_params"]
-        loss = evidential_loss(gamma, nu, alpha, beta, batch["yield"].view(-1, 1))
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-        total += loss.item()
-    print(f"epoch {epoch + 1}: loss {total / len(loader):.4f}")
-
-torch.save({"model_state_dict": model.state_dict()}, "my_model.pt")
-
-# 4. Predict a single reaction
+ckpt = torch.load("checkpoints/experiment_001/best_model.pt", map_location="cpu")
+model = ReactionForge(**ckpt["model_config"])
+model.load_state_dict(ckpt["model_state_dict"])
 model.eval()
+
 reactant = Batch.from_data_list([smiles_to_graph("c1ccc(Br)cc1")])          # bromobenzene
 product = Batch.from_data_list([smiles_to_graph("c1ccc(-c2ccccc2)cc1")])     # biphenyl
 conditions = extract_reaction_conditions(
     pd.Series({"temperature": 90, "time": 12, "catalyst_loading": 5})).unsqueeze(0)
 
 with torch.no_grad():
-    out = model(to_bond_type_index(reactant), to_bond_type_index(product), conditions)
+    out = model(reactant, product, conditions)
 
 print(f"Predicted yield: {out['yield_mean'].item() * 100:.1f}%")
 print(f"Total uncertainty:     {out['uncertainty'].item():.4f}")
@@ -317,41 +342,42 @@ print(f"  epistemic (model):   {out['epistemic_uncertainty'].item():.4f}")
 print(f"  aleatoric (data):    {out['aleatoric_uncertainty'].item():.4f}")
 ```
 
-Sample output (numbers will differ on every run):
+To predict several reactions at once, put several graphs in each `Batch.from_data_list([...])` and stack their condition vectors with `torch.stack`. [§8](#8-understanding-the-models-output) explains the outputs.
 
-```
-✅ Generated 500 synthetic reactions -> synthetic.csv
-epoch 1: loss 0.5153
-epoch 2: loss -0.0408
-...
-Predicted yield: 41.5%
-Total uncertainty:     0.4728
-  epistemic (model):   0.1861
-  aleatoric (data):    0.2867
-```
+`scripts/predict.py` is still a stub, so batch prediction from the command line isn't available yet.
 
-**Why the loss can be negative.** The evidential loss is a negative log-likelihood, and that can legitimately go below zero. Watch whether it trends downward, not its sign.
+### 7.3 Train from Python
 
-**Why `to_bond_type_index` is needed.** The data loader stores each bond as six 0/1 flags. The model's message-passing layer expects one integer per bond (its bond type). Without this conversion you get `IndexError: too many indices for tensor of dimension 1`.
-
-### 7.1 Before using this for real decisions
-
-The quick-start loop is deliberately minimal. For real work, add:
-
-1. **A train/validation/test split.** Use `torch.utils.data.random_split(dataset, [0.7, 0.15, 0.15])`. Report metrics on the test set only.
-2. **More epochs** with early stopping on validation R². `src.training.callbacks.EarlyStopping(patience=20, mode='max')` works on its own.
-3. **Metrics.** Collect `out["yield_mean"]` and `batch["yield"]` over the validation set and pass them to `src.training.metrics.calculate_metrics`.
-4. **A split that matches your question.** A random split overestimates how well the model generalises to *new* substrates or ligands. If you want to predict unseen chemistry, hold out whole substrates or ligands.
-
-### 7.2 Loading a saved model
+To customise the loop (for example a different split), use the trainer directly. This is what `scripts/train.py` does internally:
 
 ```python
-model = ReactionForge(node_feat_dim=150, edge_feat_dim=6, condition_dim=10)  # same args as training
-model.load_state_dict(torch.load("my_model.pt")["model_state_dict"])
-model.eval()
+import torch
+from torch_geometric.loader import DataLoader
+
+from src.models.reactionforge import ReactionForge
+from src.data.dataset import SuzukiMiyauraDataset
+from src.training.trainer import ReactionForgeTrainer
+
+dataset = SuzukiMiyauraDataset("my_reactions.csv")
+train_set, val_set = torch.utils.data.random_split(dataset, [0.8, 0.2])
+train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
+val_loader = DataLoader(val_set, batch_size=64)
+
+model = ReactionForge(node_feat_dim=dataset[0]["reactant"].x.shape[1],
+                      edge_feat_dim=6, condition_dim=10)
+trainer = ReactionForgeTrainer(model, torch.optim.Adam(model.parameters(), lr=1e-3),
+                               device="cpu")   # or "cuda"
+
+for epoch in range(50):
+    train_loss = trainer.train_epoch(train_loader)
+    metrics = trainer.evaluate(val_loader)  # {'loss', 'r2', 'rmse', 'mae'}; rmse/mae in % points
+    print(epoch, round(train_loss, 4), metrics)
 ```
 
-The constructor arguments must exactly match the ones used for training, or `load_state_dict` will fail with a size-mismatch error.
+### 7.4 Before using this for real decisions
+
+**Choose a split that matches your question.** The default random split overestimates how well the model generalises to *new* substrates or ligands, because near-identical reactions end up in both training and test sets. If you want to predict unseen chemistry, hold out whole substrates or ligands, using a custom split as in [§7.3](#73-train-from-python).
+
 
 ---
 
@@ -383,7 +409,7 @@ All settings are arguments to the `ReactionForge(...)` constructor. The YAML fil
 
 | Argument | Default | What it controls | Guidance |
 |---|---|---|---|
-| `node_feat_dim` | 32 | Size of each atom's feature vector | **Must be 150** with `src/data/dataset.py`. The default of 32 won't work with real data. |
+| `node_feat_dim` | 32 | Size of each atom's feature vector | **Must be 150** with `src/data/dataset.py`. The default of 32 won't work with real data. `scripts/train.py` sets it from the data automatically. |
 | `edge_feat_dim` | 4 | Bond feature size | Stored but not used by the forward pass. Set it to 6 for consistency. |
 | `condition_dim` | 10 | Length of the condition vector | Keep at 10 unless you change `extract_reaction_conditions` |
 | `hidden_dim` | 128 | Width of internal layers | 64 (small data) to 256 (large data). Must be divisible by `num_heads`. |
@@ -395,7 +421,7 @@ All settings are arguments to the `ReactionForge(...)` constructor. The YAML fil
 
 Model size at the defaults with `node_feat_dim=150` is about 1.03 million parameters. That's lower than the ~3.2 M the tests expect.
 
-**Turning features off.** The README's `--use_temporal_memory` / `--use_cross_attention` flags don't exist. To disable temporal memory, don't pass `timestamps` to `model(...)`. Cross-attention can't be switched off without editing the code.
+**Turning features off.** To disable temporal memory, pass `--no_temporal_memory` to `scripts/train.py`, or don't pass `timestamps` to `model(...)`. Cross-attention can't be switched off without editing the code.
 
 ---
 
@@ -410,9 +436,8 @@ model.eval()
 preds, trues, epi, ale = [], [], [], []
 with torch.no_grad():
     for batch in test_loader:
-        out = model(to_bond_type_index(batch["reactant"]),
-                    to_bond_type_index(batch["product"]),
-                    batch["conditions"], batch["timestamp"].view(-1))
+        out = model(batch["reactant"], batch["product"],
+                    batch["conditions"], batch["timestamp"])
         preds.append(out["yield_mean"].view(-1)); trues.append(batch["yield"].view(-1))
         epi.append(out["epistemic_uncertainty"].view(-1)); ale.append(out["aleatoric_uncertainty"].view(-1))
 y_pred, y_true = torch.cat(preds).numpy(), torch.cat(trues).numpy()
@@ -441,7 +466,7 @@ Then:
 python -m pytest tests -q
 ```
 
-Current expected result: **5 failed, 2 passed**. The failures come from the tests, not from your installation:
+Current expected result: **5 failed, 4 passed**. The failures come from the tests, not from your installation:
 
 | Test | Why it fails |
 |---|---|
@@ -460,13 +485,12 @@ If you see `ModuleNotFoundError` instead, your installation or working directory
 |---|---|---|
 | `ModuleNotFoundError: No module named 'src'` | Running from outside the repository root | `cd` to the root, or `export PYTHONPATH=/path/to/ReactionForge` |
 | `ModuleNotFoundError: No module named 'torch'` / `'rdkit'` | Dependencies not installed in the active environment | Activate your venv or conda env, then re-run [§4.2](#42-install-with-pip-recommended) |
-| `IndexError: too many indices for tensor of dimension 1` | One-hot bond features passed straight to the model | Wrap graphs with `to_bond_type_index` ([§7](#7-quick-start-train-and-predict)) |
 | `mat1 and mat2 shapes cannot be multiplied (…x150 and 154x128)` or `…and 32x128` | `node_feat_dim` doesn't match the data | Use `node_feat_dim=150` |
-| `TypeError: forward() missing 2 required positional arguments` | Running `scripts/train.py` or `ReactionForgeTrainer` | Use the loop in [§7](#7-quick-start-train-and-predict) |
-| `TypeError: … NoneType …` during batching | An invalid SMILES in the CSV | Clean the file ([§6.3](#63-validate-your-file-before-training)) |
+| `TypeError: forward() missing 2 required positional arguments` | Calling `model(batch_dict)` with the whole batch | Pass the parts: `model(batch['reactant'], batch['product'], batch['conditions'])`, or use `ReactionForgeTrainer` |
+| `⚠️ Skipping N of M rows with invalid … SMILES` | Unparseable SMILES in the CSV | Not an error, but inspect those rows ([§6.3](#63-validate-your-file-before-training)) |
 | `IndexError: index … out of bounds` in `SinusoidalTemporalEncoding` | A `timestamp` (or row number) ≥ 10 000 | Rescale timestamps below 10 000, or omit them at inference |
 | `size mismatch for …` on `load_state_dict` | Constructor arguments differ from training | Recreate the model with identical arguments |
-| `FileNotFoundError: checkpoints/reactionforge_best.pt` | No pretrained weights ship with the repo | Train your own ([§7](#7-quick-start-train-and-predict)) |
+| `FileNotFoundError: checkpoints/reactionforge_best.pt` | No pretrained weights ship with the repo | Train your own ([§7.1](#71-train-from-the-command-line)) |
 | `torch-scatter` / `torch-sparse` fail to build | Compiled extensions with no matching wheel | Remove them from `requirements.txt`. They aren't needed. |
 | Predictions all near the same value | Too little training, or inputs lack informative features (for example, ligand-driven yields) | Train longer, check the split, and review [§6.2](#62-what-happens-to-your-data) |
 
