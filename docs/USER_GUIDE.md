@@ -487,6 +487,33 @@ for epoch in range(50):
 **Choose a split that matches your question.** The default random split overestimates how well the model generalises to *new* substrates or ligands, because near-identical reactions end up in both training and test sets. If you want to predict unseen chemistry, hold out whole substrates or ligands, using a custom split as in [§7.5](#75-train-from-python), and then score the held-out group with `scripts/evaluate.py`.
 
 
+### 7.7 Benchmark on real data: the Perera et al. Suzuki dataset
+
+The standard public benchmark for Suzuki-Miyaura yield prediction is the 5,760-reaction high-throughput screen of Perera et al. (*Science* 2018). It combines 7 electrophile/boron-partner pairings on a quinoline–indazole coupling with 12 ligand options (including none), 8 base options (including none) and 4 solvents, and records the yield of one product. Most of the variation in yield comes from the conditions, so a model that can't see the ligand, base and solvent can't do well on it.
+
+`scripts/prepare_suzuki_dataset.py` downloads the paper's supplementary data and converts it to ReactionForge's CSV format. The data isn't redistributed with ReactionForge. It also writes the standard random splits from the [rxn_yields](https://github.com/rxn4chemistry/rxn_yields) repository: in each split file, the first 70 % of reactions are for training and the remaining 30 % for testing.
+
+```bash
+# 1. Download and convert split 0
+python scripts/prepare_suzuki_dataset.py --split 0 --output_dir data/suzuki_split0
+
+# 2. Train on the 70 % (10 % of it is held back for early stopping and calibration)
+python scripts/train.py --data_path data/suzuki_split0/train.csv \
+    --output_dir checkpoints/suzuki_split0 \
+    --epochs 100 --patience 15 --no_temporal_memory --test_fraction 0 --val_fraction 0.1
+
+# 3. Score on the untouched 30 %
+python scripts/evaluate.py --checkpoint checkpoints/suzuki_split0/best_model.pt \
+    --data_path data/suzuki_split0/test.csv --plot parity.png
+```
+
+Notes:
+
+- `--no_temporal_memory` is used because this dataset has no meaningful reaction order. Without a `timestamp` column the model would otherwise read the row number as a timestamp.
+- Add `--no_reagents` in step 2 to train the electrophile/product-only model, to measure how much the reagent encoding contributes.
+- Training takes roughly an hour on a 4-core CPU. A GPU is much faster.
+- To compare with published results, repeat for splits 0–9 and report the mean and standard deviation. A single split is noisy.
+
 ---
 
 ## 8. Understanding the Model's Output
