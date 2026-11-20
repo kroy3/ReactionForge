@@ -63,13 +63,13 @@ The README describes a full pipeline: command-line training, evaluation, batch p
 | `scripts/train.py` | ✅ Works | Train / validate / test with early stopping and checkpointing. See [§7.1](#71-train-from-the-command-line). |
 | `src/training/trainer.py` (`ReactionForgeTrainer`) | ✅ Works | Used by `scripts/train.py`; also usable from Python ([§7.5](#75-train-from-python)) |
 | `scripts/predict.py` | ✅ Works | Batch prediction from a CSV. See [§7.2](#72-predict-many-reactions-from-the-command-line). |
-| `scripts/evaluate.py` | ✅ Works | Scores a model on labelled data. See [§7.3](#73-evaluate-on-held-out-data). The README's `--mode loo_ligand` / `temporal_split` options don't exist. |
+| `scripts/evaluate.py` | ✅ Works | Scores a model on labelled data. See [§7.3](#73-evaluate-on-held-out-data). |
 | `scripts/hyperopt.py` | ⚠️ Stub | The objective returns a fixed `0.95` and trains nothing |
 | Pretrained checkpoint (`checkpoints/`) | ❌ Not included | Train your own with `scripts/train.py`. Load it with `src.inference.load_model` ([§7.4](#74-predict-from-python)). |
 | `scripts/run_benchmarks.sh`, `scripts/ablation_study.py`, `docs/*` pages, readthedocs site | ❌ Not in the repository | Referenced in the README only |
 | `configs/*.yaml` | ⚠️ Not read by any code | `ablation.yaml` and `transfer_learning.yaml` contain only comments |
 | Notebooks (`notebooks/`) | ⚠️ Skeletons | Imports and headings only |
-| Unit tests (`tests/`) | ⚠️ 10 of 15 pass | See [§11](#11-running-the-test-suite) |
+| Unit tests (`tests/`) | ✅ All pass | Also run automatically on GitHub for every pull request. See [§11](#11-running-the-test-suite). |
 
 **About the published numbers.** The performance table in the README (R² = 0.968, RMSE = 5.12 %, and so on) can't be reproduced from this repository alone. The benchmark dataset, training scripts, and weights behind those numbers aren't included. Treat them as claims from the accompanying paper, not as something this code demonstrates.
 
@@ -480,7 +480,7 @@ All settings are arguments to the `ReactionForge(...)` constructor. The YAML fil
 | `temporal_dim` | 64 | Size of the timestamp encoding | Must be even |
 | `dropout` | 0.2 | Regularisation strength | Increase (0.3–0.5) if validation error rises while training error falls |
 
-Model size at the defaults with `node_feat_dim=150` is about 1.03 million parameters. That's lower than the ~3.2 M the tests expect.
+Model size at the defaults with `node_feat_dim=150` is about 1.03 million parameters.
 
 **Turning features off.** To disable temporal memory, pass `--no_temporal_memory` to `scripts/train.py`, or don't pass `timestamps` to `model(...)`. Cross-attention can't be switched off without editing the code.
 
@@ -527,16 +527,15 @@ Then:
 python -m pytest tests -q
 ```
 
-Current expected result: **5 failed, 10 passed**. The failures come from the tests, not from your installation:
+All tests should pass:
 
-| Test | Why it fails |
-|---|---|
-| `test_atom_features`, `test_smiles_to_features` | Expect 154 features. `featurization.py` produces 144. |
-| `test_model_forward` | Calls `model(batch_dict)`, which doesn't match `forward()` |
-| `test_model_parameters` | Expects 3–4 M parameters. The default model has ~1 M. |
-| `test_early_stopping` | Off-by-one in the test's expectation of when patience runs out |
+```
+20 passed
+```
 
-If you see `ModuleNotFoundError` instead, your installation or working directory is the problem (see [§12](#12-troubleshooting)).
+The same tests, plus a short train → predict → evaluate run on synthetic data, run automatically on GitHub for every pull request and every push to `main` (`.github/workflows/tests.yml`). A red ❌ next to a pull request means something broke. Open the **Details** link to see which step failed.
+
+If tests fail with `ModuleNotFoundError`, your installation or working directory is the problem (see [§12](#12-troubleshooting)).
 
 ---
 

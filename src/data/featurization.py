@@ -14,7 +14,7 @@ def atom_features(atom):
     """
     Generate feature vector for an atom.
     
-    Returns 154-dimensional feature vector including:
+    Returns 144-dimensional feature vector including:
     - One-hot encoded atom type (118 elements)
     - Degree (one-hot, 0-5)
     - Hybridization (one-hot, SP/SP2/SP3/SP3D/SP3D2)

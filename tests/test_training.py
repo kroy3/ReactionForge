@@ -9,13 +9,22 @@ from src.training.metrics import calculate_metrics
 def test_early_stopping():
     """Test early stopping callback"""
     early_stop = EarlyStopping(patience=3, mode='max')
-    
+
     assert not early_stop(0.90)
-    assert not early_stop(0.92)
-    assert not early_stop(0.91)  # No improvement
-    assert not early_stop(0.91)  # Still no improvement
-    assert not early_stop(0.91)  # Third time
-    assert early_stop.early_stop  # Should trigger
+    assert not early_stop(0.92)   # Improvement resets the counter
+    assert not early_stop(0.91)   # 1st epoch without improvement
+    assert not early_stop(0.91)   # 2nd
+    assert early_stop(0.91)       # 3rd == patience -> stop
+    assert early_stop.early_stop
+
+
+def test_early_stopping_resets_on_improvement():
+    """An improvement before patience runs out resets the count."""
+    early_stop = EarlyStopping(patience=2, mode='max')
+
+    for score in [0.5, 0.4, 0.6, 0.5]:
+        assert not early_stop(score)
+    assert early_stop(0.5)
 
 
 def test_metrics_calculation():
