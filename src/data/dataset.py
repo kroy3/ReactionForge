@@ -141,6 +141,12 @@ def smiles_to_graph(smiles: str) -> Optional[Data]:
     return data
 
 
+def _value_or_default(row: pd.Series, column: str, default: float) -> float:
+    """Return row[column], or ``default`` if the column is absent or the cell is blank."""
+    value = row.get(column, default)
+    return default if pd.isna(value) else float(value)
+
+
 def extract_reaction_conditions(row: pd.Series) -> torch.Tensor:
     """
     Extract reaction condition features from dataframe row.
@@ -156,15 +162,15 @@ def extract_reaction_conditions(row: pd.Series) -> torch.Tensor:
     conditions = []
     
     # Temperature (normalize to 0-1, assuming range 0-200°C)
-    temp = row.get('temperature', 100) / 200.0
+    temp = _value_or_default(row, 'temperature', 100) / 200.0
     conditions.append(temp)
     
     # Time (normalize to 0-1, assuming range 0-48h)
-    time = row.get('time', 12) / 48.0
+    time = _value_or_default(row, 'time', 12) / 48.0
     conditions.append(time)
     
     # Catalyst loading (normalize to 0-1, assuming range 0-10 mol%)
-    cat_loading = row.get('catalyst_loading', 5) / 10.0
+    cat_loading = _value_or_default(row, 'catalyst_loading', 5) / 10.0
     conditions.append(cat_loading)
     
     # Add other condition encodings (simplified - in practice use one-hot or embeddings)
@@ -192,7 +198,10 @@ class SuzukiMiyauraDataset(Dataset):
     """
     
     def __init__(self, csv_path: str, transform=None, pre_transform=None):
-        df = pd.read_csv(csv_path)
+        # Accept a path or an already-loaded DataFrame
+        df = csv_path.copy() if isinstance(csv_path, pd.DataFrame) else pd.read_csv(csv_path)
+        if isinstance(csv_path, pd.DataFrame):
+            csv_path = 'the input DataFrame'
 
         # Rows whose SMILES RDKit cannot parse would make get() return None,
         # which crashes batching. Drop them up front and say how many.

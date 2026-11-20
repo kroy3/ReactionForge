@@ -61,14 +61,15 @@ The README describes a full pipeline: command-line training, evaluation, batch p
 | Evidential loss function | ✅ Works | `evidential_loss()` |
 | Metrics, uncertainty, plotting utilities | ✅ Work | Plain NumPy/matplotlib functions |
 | `scripts/train.py` | ✅ Works | Train / validate / test with early stopping and checkpointing. See [§7.1](#71-train-from-the-command-line). |
-| `src/training/trainer.py` (`ReactionForgeTrainer`) | ✅ Works | Used by `scripts/train.py`; also usable from Python ([§7.3](#73-train-from-python)) |
-| `scripts/evaluate.py`, `scripts/predict.py` | ⚠️ Stubs | They load inputs, then stop at `# Implementation continues...` |
+| `src/training/trainer.py` (`ReactionForgeTrainer`) | ✅ Works | Used by `scripts/train.py`; also usable from Python ([§7.5](#75-train-from-python)) |
+| `scripts/predict.py` | ✅ Works | Batch prediction from a CSV. See [§7.2](#72-predict-many-reactions-from-the-command-line). |
+| `scripts/evaluate.py` | ✅ Works | Scores a model on labelled data. See [§7.3](#73-evaluate-on-held-out-data). The README's `--mode loo_ligand` / `temporal_split` options don't exist. |
 | `scripts/hyperopt.py` | ⚠️ Stub | The objective returns a fixed `0.95` and trains nothing |
-| Pretrained checkpoint (`checkpoints/`) | ❌ Not included | `ReactionForge.load_from_checkpoint()` from the README doesn't exist |
+| Pretrained checkpoint (`checkpoints/`) | ❌ Not included | Train your own with `scripts/train.py`. Load it with `src.inference.load_model` ([§7.4](#74-predict-from-python)). |
 | `scripts/run_benchmarks.sh`, `scripts/ablation_study.py`, `docs/*` pages, readthedocs site | ❌ Not in the repository | Referenced in the README only |
 | `configs/*.yaml` | ⚠️ Not read by any code | `ablation.yaml` and `transfer_learning.yaml` contain only comments |
 | Notebooks (`notebooks/`) | ⚠️ Skeletons | Imports and headings only |
-| Unit tests (`tests/`) | ⚠️ 4 of 9 pass | See [§11](#11-running-the-test-suite) |
+| Unit tests (`tests/`) | ⚠️ 10 of 15 pass | See [§11](#11-running-the-test-suite) |
 
 **About the published numbers.** The performance table in the README (R² = 0.968, RMSE = 5.12 %, and so on) can't be reproduced from this repository alone. The benchmark dataset, training scripts, and weights behind those numbers aren't included. Treat them as claims from the accompanying paper, not as something this code demonstrates.
 
@@ -170,9 +171,10 @@ ReactionForge/
 │   │   ├── trainer.py        Training loop used by scripts/train.py
 │   │   ├── callbacks.py      EarlyStopping, ModelCheckpoint
 │   │   └── metrics.py        R², RMSE, MAE, calibration error
-│   └── utils/
-│       ├── uncertainty.py    Calibration, active-learning sampling, reliability data
-│       └── visualization.py  Prediction and learning-curve plots
+│   ├── utils/
+│   │   ├── uncertainty.py    Calibration, active-learning sampling, reliability data
+│   │   └── visualization.py  Prediction and learning-curve plots
+│   └── inference.py          load_model, predict_dataframe (used by predict/evaluate)
 ├── scripts/                  CLI entry points (see §2 for status)
 ├── configs/                  YAML files (not read by any code)
 ├── notebooks/                Tutorial skeletons
@@ -217,7 +219,7 @@ c1ccc(Cl)cc1,c1ccc(-c2ccccc2)cc1,110,24,5,48.3
 
 - **Yield** is divided by 100, so the model works on a 0–1 scale. Predictions come back on the same scale. Multiply by 100 to get a percentage.
 - **Temperature** is divided by 200, **time** by 48, and **catalyst loading** by 10. Values outside 0–200 °C, 0–48 h, or 0–10 mol % still work, but they fall outside the range the scaling assumes.
-- **Missing condition values** are silently replaced with defaults: 100 °C, 12 h, 5 mol %. Check your CSV for blanks. The model won't warn you.
+- **Missing condition values** (a missing column or a blank cell) are silently replaced with defaults: 100 °C, 12 h, 5 mol %. Check your CSV for blanks. The model won't warn you.
 - **Solvent, base, and ligand are not encoded.** The condition vector has 10 slots. Only the first three are filled, and the remaining seven are always zero. If your yields depend mainly on ligand or base choice, which is common in high-throughput Suzuki datasets, the current model can't see that information.
 - **Missing `timestamp`** falls back to the row number. Datasets with more than 10 000 rows and no `timestamp` column will crash (see [§12](#12-troubleshooting)).
 
@@ -311,22 +313,83 @@ The synthetic generator adds random noise with a standard deviation of 10 yield 
 
 **Why the training loss can be negative.** The evidential loss is a negative log-likelihood, which can legitimately go below zero. Judge training by validation R² and RMSE, not by the sign of the loss.
 
-### 7.2 Predict a single reaction
+### 7.2 Predict many reactions from the command line
 
-The checkpoint stores the settings the model was built with (`model_config`), so you can rebuild it without remembering them:
+Put the reactions you want scored in a CSV with the same columns as your training data. The `yield` column isn't needed.
+
+```bash
+python scripts/predict.py \
+    --checkpoint checkpoints/experiment_001/best_model.pt \
+    --input_csv candidates.csv \
+    --output_csv predictions.csv
+```
+
+`predictions.csv` is your input file with these columns added. Rows stay in the original order:
+
+| Column | Meaning |
+|---|---|
+| `predicted_yield` | Predicted yield, in percent |
+| `uncertainty_std` | Predictive standard deviation, in percentage points. A reaction predicted at 70 % with `uncertainty_std` 8 is a "70 ± 8 %" prediction (before calibration; see [§7.3](#73-evaluate-on-held-out-data)). |
+| `epistemic_var` | Model uncertainty (variance, 0–1 scale). Highest for reactions unlike the training data. Use it to choose experiments. |
+| `aleatoric_var` | Expected data noise (variance, 0–1 scale) |
+| `status` | `ok`, or why the row couldn't be predicted (for example `invalid SMILES`). Such rows have empty prediction columns. |
+
+To rank candidate conditions, sort by `predicted_yield`. To choose the most informative next experiments, sort by `epistemic_var`.
+
+### 7.3 Evaluate on held-out data
+
+To measure how good a trained model is, score it on reactions **it wasn't trained on**. These must have a `yield` column.
+
+```bash
+python scripts/evaluate.py \
+    --checkpoint checkpoints/experiment_001/best_model.pt \
+    --data_path held_out.csv \
+    --output_csv evaluation.csv \
+    --plot parity.png
+```
+
+`--output_csv` (per-reaction predictions plus `abs_error`) and `--plot` (a predicted-vs-true scatter plot coloured by uncertainty) are optional.
+
+Example output, from a model trained on 2 000 synthetic reactions and scored on 1 000 different ones:
+
+```
+Reactions scored: 1000
+R²:   0.4279
+RMSE: 9.76%
+MAE:  7.82%
+ECE:  0.1874
+Uncertainty coverage (ideal for a calibrated Gaussian: 68% / 95%):
+  true yield within ±1 std: 99%
+  true yield within ±2 std: 100%
+```
+
+**How to read the coverage lines.** If the uncertainty were well calibrated, about 68 % of true yields would fall within ±1 standard deviation of the prediction, and 95 % within ±2. In the run above 99 % fall within ±1, so this model's `uncertainty_std` is **too large**: it is more accurate than it claims to be. The reverse (well under 68 %) means it is overconfident. Check this on your own data before quoting `uncertainty_std` as an error bar. [§10](#10-evaluation-and-uncertainty-tools) lists the tools for recalibrating it.
+
+**Don't evaluate on your training CSV.** `scripts/train.py` already reports scores on its own held-out test split. Running `evaluate.py` on the full training file mixes in reactions the model has seen, which inflates the scores.
+
+### 7.4 Predict from Python
+
+The checkpoint stores the settings the model was built with (`model_config`), and `load_model` rebuilds it from them. For a table of reactions, `predict_dataframe` returns the same columns as `scripts/predict.py`:
+
+```python
+import pandas as pd
+from src.inference import load_model, predict_dataframe
+
+model, use_timestamps = load_model("checkpoints/experiment_001/best_model.pt")
+preds = predict_dataframe(model, pd.read_csv("candidates.csv"), use_timestamps=use_timestamps)
+```
+
+For one reaction at a time, with the model's raw outputs:
 
 ```python
 import torch
 import pandas as pd
 from torch_geometric.data import Batch
 
-from src.models.reactionforge import ReactionForge
+from src.inference import load_model
 from src.data.dataset import smiles_to_graph, extract_reaction_conditions
 
-ckpt = torch.load("checkpoints/experiment_001/best_model.pt", map_location="cpu")
-model = ReactionForge(**ckpt["model_config"])
-model.load_state_dict(ckpt["model_state_dict"])
-model.eval()
+model, _ = load_model("checkpoints/experiment_001/best_model.pt")
 
 reactant = Batch.from_data_list([smiles_to_graph("c1ccc(Br)cc1")])          # bromobenzene
 product = Batch.from_data_list([smiles_to_graph("c1ccc(-c2ccccc2)cc1")])     # biphenyl
@@ -344,9 +407,7 @@ print(f"  aleatoric (data):    {out['aleatoric_uncertainty'].item():.4f}")
 
 To predict several reactions at once, put several graphs in each `Batch.from_data_list([...])` and stack their condition vectors with `torch.stack`. [§8](#8-understanding-the-models-output) explains the outputs.
 
-`scripts/predict.py` is still a stub, so batch prediction from the command line isn't available yet.
-
-### 7.3 Train from Python
+### 7.5 Train from Python
 
 To customise the loop (for example a different split), use the trainer directly. This is what `scripts/train.py` does internally:
 
@@ -374,9 +435,9 @@ for epoch in range(50):
     print(epoch, round(train_loss, 4), metrics)
 ```
 
-### 7.4 Before using this for real decisions
+### 7.6 Before using this for real decisions
 
-**Choose a split that matches your question.** The default random split overestimates how well the model generalises to *new* substrates or ligands, because near-identical reactions end up in both training and test sets. If you want to predict unseen chemistry, hold out whole substrates or ligands, using a custom split as in [§7.3](#73-train-from-python).
+**Choose a split that matches your question.** The default random split overestimates how well the model generalises to *new* substrates or ligands, because near-identical reactions end up in both training and test sets. If you want to predict unseen chemistry, hold out whole substrates or ligands, using a custom split as in [§7.5](#75-train-from-python), and then score the held-out group with `scripts/evaluate.py`.
 
 
 ---
@@ -427,21 +488,21 @@ Model size at the defaults with `node_feat_dim=150` is about 1.03 million parame
 
 ## 10. Evaluation and Uncertainty Tools
 
-These functions are standalone and work on NumPy arrays. Collect predictions first:
+`scripts/evaluate.py` ([§7.3](#73-evaluate-on-held-out-data)) covers the usual case. For more detailed analysis, the functions below are standalone and work on NumPy arrays. Collect predictions first, using the 0–1 yield scale:
 
 ```python
-import numpy as np
+import pandas as pd
+from src.inference import load_model, predict_dataframe
 
-model.eval()
-preds, trues, epi, ale = [], [], [], []
-with torch.no_grad():
-    for batch in test_loader:
-        out = model(batch["reactant"], batch["product"],
-                    batch["conditions"], batch["timestamp"])
-        preds.append(out["yield_mean"].view(-1)); trues.append(batch["yield"].view(-1))
-        epi.append(out["epistemic_uncertainty"].view(-1)); ale.append(out["aleatoric_uncertainty"].view(-1))
-y_pred, y_true = torch.cat(preds).numpy(), torch.cat(trues).numpy()
-epistemic, aleatoric = torch.cat(epi).numpy(), torch.cat(ale).numpy()
+model, use_timestamps = load_model("checkpoints/experiment_001/best_model.pt")
+df = pd.read_csv("held_out.csv")
+preds = predict_dataframe(model, df, use_timestamps=use_timestamps)
+ok = preds["status"] == "ok"
+
+y_true = df.loc[ok, "yield"].to_numpy() / 100
+y_pred = preds.loc[ok, "predicted_yield"].to_numpy(dtype=float) / 100
+epistemic = preds.loc[ok, "epistemic_var"].to_numpy(dtype=float)
+aleatoric = preds.loc[ok, "aleatoric_var"].to_numpy(dtype=float)
 ```
 
 Then:
@@ -466,7 +527,7 @@ Then:
 python -m pytest tests -q
 ```
 
-Current expected result: **5 failed, 4 passed**. The failures come from the tests, not from your installation:
+Current expected result: **5 failed, 10 passed**. The failures come from the tests, not from your installation:
 
 | Test | Why it fails |
 |---|---|
@@ -488,7 +549,9 @@ If you see `ModuleNotFoundError` instead, your installation or working directory
 | `mat1 and mat2 shapes cannot be multiplied (…x150 and 154x128)` or `…and 32x128` | `node_feat_dim` doesn't match the data | Use `node_feat_dim=150` |
 | `TypeError: forward() missing 2 required positional arguments` | Calling `model(batch_dict)` with the whole batch | Pass the parts: `model(batch['reactant'], batch['product'], batch['conditions'])`, or use `ReactionForgeTrainer` |
 | `⚠️ Skipping N of M rows with invalid … SMILES` | Unparseable SMILES in the CSV | Not an error, but inspect those rows ([§6.3](#63-validate-your-file-before-training)) |
-| `IndexError: index … out of bounds` in `SinusoidalTemporalEncoding` | A `timestamp` (or row number) ≥ 10 000 | Rescale timestamps below 10 000, or omit them at inference |
+| `IndexError: index … out of bounds` in `SinusoidalTemporalEncoding`, or `Timestamps must be in [0, 10000)` | A `timestamp` (or, with no `timestamp` column, the row number) ≥ 10 000 | Rescale timestamps below 10 000, or split the CSV into files of under 10 000 rows |
+| `… has no 'model_config'` | Checkpoint written before `scripts/train.py` was fixed | Retrain, or rebuild `ReactionForge(...)` with the original arguments and call `load_state_dict` |
+| `Input already has output column(s) …` | The input CSV is an earlier `predict.py` output | Drop the old prediction columns, or predict from the original file |
 | `size mismatch for …` on `load_state_dict` | Constructor arguments differ from training | Recreate the model with identical arguments |
 | `FileNotFoundError: checkpoints/reactionforge_best.pt` | No pretrained weights ship with the repo | Train your own ([§7.1](#71-train-from-the-command-line)) |
 | `torch-scatter` / `torch-sparse` fail to build | Compiled extensions with no matching wheel | Remove them from `requirements.txt`. They aren't needed. |
