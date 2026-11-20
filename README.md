@@ -242,6 +242,8 @@ python scripts/evaluate.py \
 
 ## 📖 Documentation
 
+📘 **Start with the [User Guide](docs/USER_GUIDE.md)**: installation, data format, a tested train-and-predict example, output interpretation, and troubleshooting.
+
 Full documentation is available at **[reactionforge.readthedocs.io](https://reactionforge.readthedocs.io)**
 
 ### Key Topics
