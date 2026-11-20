@@ -1,7 +1,7 @@
 # ReactionForge: Temporal Graph Network for Reaction Yield Prediction
 
 <p align="center">
-  <strong>State-of-the-art deep learning for chemical reaction yield prediction</strong>
+  <strong>Graph neural network for Suzuki-Miyaura yield prediction with calibrated uncertainty</strong>
 </p>
 
 <p align="center">
@@ -14,25 +14,35 @@
 
 ## 🔬 Overview
 
-**ReactionForge** is a novel Temporal Graph Network (TGN) architecture designed to predict Suzuki-Miyaura cross-coupling reaction yields with state-of-the-art accuracy and calibrated uncertainty quantification. Our model **surpasses YieldGNN** (R² = 0.957) through five key innovations:
+**ReactionForge** predicts the yield of Suzuki-Miyaura cross-coupling reactions, with an uncertainty estimate for every prediction. Each reaction is described by molecular structures (SMILES) of its components:
 
-1. **🕐 Temporal Memory Mechanisms** - Tracks catalyst evolution and reagent dynamics across reaction sequences
-2. **🔀 Cross-Attention Architecture** - Explicitly learns structural transformations between reactants and products  
-3. **🌲 Hierarchical Graph Pooling** - Automatically discovers functional group patterns via SAGPool
-4. **📊 Evidential Uncertainty** - Provides calibrated epistemic + aleatoric uncertainty in a single forward pass
-5. **🎯 Multi-Task Learning** - Joint prediction of yield, selectivity, and reaction time improves generalization
+- **Electrophile** (aryl halide or triflate) and **product**
+- **Boron coupling partner**, **ligand**, **base** and **solvent**, each optional
+- **Temperature**, **time** and **catalyst loading**, also optional
 
-### Performance Highlights
+How the model works:
 
-| Metric | ReactionForge | YieldGNN | YieldBERT | Improvement |
-|--------|---------------|----------|-----------|-------------|
-| R² Score | **0.968 ± 0.004** | 0.957 ± 0.005 | 0.810 ± 0.010 | +1.1% / +19.5% |
-| RMSE (%) | **5.12 ± 0.18** | 6.10 ± 0.20 | 11.0 ± 0.5 | -16% / -53% |
-| MAE (%) | **3.89 ± 0.12** | 4.81 ± 0.15 | 8.2 ± 0.3 | -19% / -53% |
-| Training Time | **1.8h (GPU)** | 2.5h | 6-8h | 28% faster |
-| Calibration (ECE) | **0.031** | N/A | N/A | Well-calibrated |
+1. **Molecular graph encoding.** Every component is a graph of atoms and bonds, encoded with shared Weisfeiler-Lehman message-passing layers. Ligands, bases and solvents are read as *structures*, not names from a fixed list.
+2. **Reactant-product cross-attention** relates the electrophile to the product.
+3. **Evidential uncertainty.** The output layer predicts a Normal-Inverse-Gamma distribution, giving epistemic (model) and aleatoric (data) uncertainty in one forward pass. After training, the uncertainty is calibrated on a validation set.
+4. **Optional temporal memory.** A GRU can carry state across a sequence of reactions when a `timestamp` column is supplied. It has not been evaluated on a dataset with meaningful reaction order.
 
-*Evaluated on 5,760 Suzuki-Miyaura reactions (70/30 split, 10 seeds)*
+The model also has a selectivity head and a SAGPool layer, but neither is trained or used yet. See the [project status](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#2-project-status-read-this-first) for what is and isn't implemented.
+
+### Benchmark
+
+Measured on the 5,760-reaction high-throughput Suzuki-Miyaura dataset of Perera et al. (*Science* 2018). Standard random split 0 from rxn_yields: trained on 70% of the reactions and scored on the other 30% (1,728 reactions the model never saw).
+
+| Model | R² | RMSE (yield %) | MAE (yield %) | Within ±1σ / ±2σ |
+|---|---|---|---|---|
+| ReactionForge (boron partner, ligand, base, solvent) | **0.835** | **11.3** | **7.7** | 74% / 95% |
+| ReactionForge, electrophile + product only | 0.177 | 25.2 | 20.9 | 63% / 98% |
+
+- **Run conditions:** a single split and seed on CPU, stopped at the 100-epoch limit. Means over all 10 standard splits, as reported in the literature, haven't been run yet.
+- **Calibration:** the uncertainty is calibrated on a validation subset; ideal coverage is 68% / 95%.
+- **Weak spot:** the model is least reliable on failed reactions in the reversed coupling orientation. See the [benchmark notes](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset).
+
+Reproduce it with the commands in [Reproducing the Benchmark](#-reproducing-the-benchmark).
 
 ---
 
@@ -122,9 +132,10 @@ ReactionForge/
 │   │   └── uncertainty.py         # Uncertainty calibration
 │   └── inference.py               # Load checkpoints, batch prediction
 ├── scripts/
+│   ├── prepare_suzuki_dataset.py  # Download/convert the Perera et al. benchmark
 │   ├── train.py                   # Main training script
 │   ├── evaluate.py                # Evaluation on test set
-│   ├── hyperopt.py                # Hyperparameter optimization
+│   ├── hyperopt.py                # Hyperparameter search (placeholder, not implemented)
 │   └── predict.py                 # Batch prediction
 ├── notebooks/
 │   ├── 01_quickstart.ipynb        # Getting started tutorial
@@ -165,78 +176,31 @@ python scripts/train.py \
     --num_wln_layers 3
 ```
 
-The best model is saved to `<output_dir>/best_model.pt`. Run `python scripts/train.py --help` for all options, or see the [User Guide](docs/USER_GUIDE.md#71-train-from-the-command-line).
+The best model is saved to `<output_dir>/best_model.pt`. All settings are command-line options: run `python scripts/train.py --help`, or see the [User Guide](docs/USER_GUIDE.md#71-train-from-the-command-line). The CSV columns the model reads, including ligand, base and solvent, are listed in the [data format section](docs/USER_GUIDE.md#61-file-format).
 
-### Advanced: Hyperparameter Optimization
-
-```bash
-# Run Optuna-based hyperparameter search
-python scripts/hyperopt.py \
-    --data_path data/suzuki_reactions.csv \
-    --n_trials 100 \
-    --study_name reactionforge_opt
-```
-
-### Configuration Files
-
-Example `config.yaml`:
-
-```yaml
-model:
-  hidden_dim: 128
-  num_wln_layers: 3
-  num_attention_heads: 8
-  pooling_ratio: 0.5
-  dropout: 0.2
-  use_temporal_memory: true
-  use_cross_attention: true
-
-training:
-  epochs: 200
-  batch_size: 64
-  learning_rate: 1e-3
-  weight_decay: 1e-5
-  lr_scheduler: 'ReduceLROnPlateau'
-  patience: 20
-  min_lr: 1e-6
-
-loss:
-  evidential_lambda: 0.01
-  selectivity_weight: 0.3
-  
-data:
-  train_split: 0.7
-  val_split: 0.15
-  test_split: 0.15
-  random_seed: 42
-```
+The YAML files in `configs/` are not read by any code yet, and `scripts/hyperopt.py` is a placeholder that does not train models.
 
 ---
 
-## 📊 Reproducing Paper Results
+## 📊 Reproducing the Benchmark
 
-### Main Benchmarking Experiment
+The benchmark uses the 5,760-reaction high-throughput Suzuki-Miyaura dataset of Perera et al. (*Science* 2018), with the standard random splits from [rxn_yields](https://github.com/rxn4chemistry/rxn_yields). The data isn't redistributed here: the preparation script downloads it.
 
 ```bash
-# Run full benchmarking suite (takes ~24 hours on RTX 3090)
-bash scripts/run_benchmarks.sh
+# 1. Download and convert split 0 (70% train / 30% test)
+python scripts/prepare_suzuki_dataset.py --split 0 --output_dir data/suzuki_split0
 
-# Results will be saved to results/benchmarks/
-# - comparison_table.csv
-# - learning_curves.png
-# - uncertainty_calibration.png
+# 2. Train on the 70%, holding out 10% of it for early stopping and calibration
+python scripts/train.py --data_path data/suzuki_split0/train.csv \
+    --output_dir checkpoints/suzuki_split0 \
+    --epochs 100 --patience 15 --no_temporal_memory --test_fraction 0 --val_fraction 0.1
+
+# 3. Score on the untouched 30% test set
+python scripts/evaluate.py --checkpoint checkpoints/suzuki_split0/best_model.pt \
+    --data_path data/suzuki_split0/test.csv --plot parity.png
 ```
 
-### Ablation Studies
-
-```python
-# Test individual components
-python scripts/ablation_study.py \
-    --ablate temporal_memory \
-    --ablate cross_attention \
-    --ablate hierarchical_pooling \
-    --ablate evidential_head
-```
+Add `--no_reagents` to step 2 to train the reactant/product-only model, the ablation in the table above. Repeat with `--split 1` to `9` for the mean and spread over splits.
 
 ### Evaluating a Trained Model
 
@@ -294,7 +258,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- **YieldGNN** (Saebi et al., 2023) for establishing the benchmark
+- **Perera et al.** (*Science* 2018) for the Suzuki-Miyaura high-throughput dataset, and **Schwaller et al.** (rxn_yields) for the standard splits
 - **Chemprop v2.0** (Heid et al., 2024) for evidential deep learning implementation
 - **PyTorch Geometric** team for excellent graph learning tools
 - **University of Houston** Department of Biology & Biochemistry

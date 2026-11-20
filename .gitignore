@@ -4,3 +4,8 @@ __pycache__/
 
 # Sphinx build output
 docs/_build/
+
+# Training/evaluation logs and outputs written to the working directory
+*.log
+checkpoints/
+data/

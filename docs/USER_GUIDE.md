@@ -29,9 +29,9 @@
 
 ReactionForge is a deep-learning model that estimates the **yield** (0–100 %) of a **Suzuki-Miyaura cross-coupling reaction**. You give it:
 
-- the structure of the **reactant** (aryl halide) as a SMILES string,
-- the structure of the **product** as a SMILES string,
-- the **reaction conditions**: temperature, time, and catalyst loading.
+- the structure of the **electrophile** (aryl halide or triflate) and the **product**, as SMILES strings,
+- optionally, the **boron coupling partner**, **ligand**, **base** and **solvent**, also as SMILES,
+- optionally, **temperature, time and catalyst loading**.
 
 It returns:
 
@@ -45,7 +45,9 @@ Typical uses:
 - Flagging reactions where the model is unsure and an experiment would be most informative (active learning).
 - Research on graph neural networks for chemistry.
 
-The model is built with PyTorch and PyTorch Geometric. It combines graph message passing over the molecular structure (Weisfeiler-Lehman layers), attention between the reactant and product, an optional memory of reaction order (GRU), and an *evidential* output layer that produces uncertainty in a single forward pass.
+The model is built with PyTorch and PyTorch Geometric. Every molecule (electrophile, product, boron partner, ligand, base, solvent) is turned into a graph of atoms and bonds and encoded with the same message-passing layers (Weisfeiler-Lehman network). It then combines these with attention between the electrophile and product, an optional memory of reaction order (GRU), and an *evidential* output layer that produces uncertainty in a single forward pass.
+
+Because ligands, bases and solvents are read as *structures* rather than as names from a fixed list, the model can in principle make predictions for a ligand it hasn't seen. How well that works depends on how similar the new ligand is to those in the training data. The epistemic uncertainty should be higher in that case, and you should check it.
 
 ---
 
@@ -57,7 +59,9 @@ The README describes a full pipeline: command-line training, evaluation, batch p
 |---|---|---|
 | Model (`src/models/reactionforge.py`) | ✅ Works | |
 | Dataset loader (`src/data/dataset.py`) | ✅ Works | Produces 150-dim atom features and 6-dim one-hot bond features |
-| Synthetic data generator | ✅ Works | `generate_synthetic_dataset()` |
+| Synthetic data generator | ✅ Works | `generate_synthetic_dataset()`; products computed from reactants, invented yield rules ([§6.4](#64-no-data-yet-generate-a-synthetic-set)) |
+| Ligand / base / solvent / boron partner | ✅ Encoded | As molecular graphs, from optional CSV columns ([§6.1](#61-file-format)) |
+| `scripts/prepare_suzuki_dataset.py` | ✅ Works | Downloads and converts the 5,760-reaction Perera et al. dataset ([§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset)) |
 | Evidential loss function | ✅ Works | `evidential_loss()` |
 | Metrics, uncertainty, plotting utilities | ✅ Work | Plain NumPy/matplotlib functions |
 | `scripts/train.py` | ✅ Works | Train / validate / test with early stopping and checkpointing. See [§7.1](#71-train-from-the-command-line). |
@@ -204,17 +208,27 @@ ReactionForge reads a **CSV file with one reaction per row**. Column names must 
 | `temperature` | Recommended | °C | Yes | `90` |
 | `time` | Recommended | hours | Yes | `12` |
 | `catalyst_loading` | Recommended | mol % | Yes | `5` |
+| `boronic_acid_smiles` | Recommended | SMILES | Yes | `OB(O)c1ccccc1` |
+| `ligand_smiles` | Recommended | SMILES; blank = no ligand | Yes | `C1CCC(P(C2CCCCC2)C2CCCCC2)CC1` (PCy₃) |
+| `base_smiles` | Recommended | SMILES; blank = no base | Yes | `[K+].[K+].[K+].O=P([O-])([O-])[O-]` (K₃PO₄) |
+| `solvent_smiles` | Recommended | SMILES | Yes | `C1CCOC1` (THF) |
 | `selectivity` | Optional | integer class 0 / 1 / 2 | Loaded, but not used in the loss | `2` |
 | `timestamp` | Optional | integer ≥ 0, **< 10 000** | Yes (temporal memory) | `137` |
-| `boronic_acid_smiles` | Optional | SMILES | **No.** It's read into the table but never featurised. | `OB(O)c1ccccc1` |
 
-Minimal example (`my_reactions.csv`):
+**The reagent columns** (`boronic_acid_smiles`, `ligand_smiles`, `base_smiles`, `solvent_smiles`):
+
+- **Salts** are written as dot-separated ions, as in the K₃PO₄ example. Boronate salts work too, e.g. `F[B-](F)(F)c1ccccc1.[K+]` for a potassium aryltrifluoroborate.
+- **A blank cell means the component is absent** (a ligand-free or base-free reaction). The model learns a separate "absent" representation, so leave the cell blank rather than inventing a placeholder.
+- **A model uses the reagent columns it was trained with.** `scripts/train.py` uses every reagent column present in the training CSV (`--no_reagents` turns this off). At prediction time the same columns are read; if one is missing from the prediction CSV, that component is treated as absent for every row, which is usually not what you want.
+- **Catalyst:** there is no catalyst column. Datasets that vary the palladium source can add it by including it in the ligand SMILES (e.g. `ligand.[Pd]`), but this hasn't been tested.
+
+Example (`my_reactions.csv`; the yields are illustrative):
 
 ```text
-reactant_smiles,product_smiles,temperature,time,catalyst_loading,yield
-c1ccc(Br)cc1,c1ccc(-c2ccccc2)cc1,90,12,5,82.5
-c1ccc(I)cc1,c1ccc(-c2ccccc2)cc1,80,6,2,91.0
-c1ccc(Cl)cc1,c1ccc(-c2ccccc2)cc1,110,24,5,48.3
+reactant_smiles,boronic_acid_smiles,ligand_smiles,base_smiles,solvent_smiles,product_smiles,temperature,yield
+c1ccc(Br)cc1,OB(O)c1ccccc1,c1ccc(P(c2ccccc2)c2ccccc2)cc1,[K+].[K+].O=C([O-])[O-],C1COCCO1,c1ccc(-c2ccccc2)cc1,90,82.5
+c1ccc(Cl)cc1,OB(O)c1ccccc1,c1ccc(P(c2ccccc2)c2ccccc2)cc1,[K+].[K+].O=C([O-])[O-],C1COCCO1,c1ccc(-c2ccccc2)cc1,90,6.1
+c1ccc(Cl)cc1,OB(O)c1ccccc1,COc1cccc(OC)c1-c1ccccc1P(C1CCCCC1)C1CCCCC1,[K+].[K+].[K+].O=P([O-])([O-])[O-],C1COCCO1,c1ccc(-c2ccccc2)cc1,100,88.0
 ```
 
 ### 6.2 What happens to your data
@@ -222,7 +236,7 @@ c1ccc(Cl)cc1,c1ccc(-c2ccccc2)cc1,110,24,5,48.3
 - **Yield** is divided by 100, so the model works on a 0–1 scale. Predictions come back on the same scale. Multiply by 100 to get a percentage.
 - **Temperature** is divided by 200, **time** by 48, and **catalyst loading** by 10. Values outside 0–200 °C, 0–48 h, or 0–10 mol % still work, but they fall outside the range the scaling assumes.
 - **Missing condition values** (a missing column or a blank cell) are silently replaced with defaults: 100 °C, 12 h, 5 mol %. Check your CSV for blanks. The model won't warn you.
-- **Solvent, base, and ligand are not encoded.** The condition vector has 10 slots. Only the first three are filled, and the remaining seven are always zero. If your yields depend mainly on ligand or base choice, which is common in high-throughput Suzuki datasets, the current model can't see that information.
+- **Reagents are encoded as molecular graphs**, using the same encoder as the electrophile, so structurally similar ligands get similar representations. The separate 10-slot condition vector still holds only temperature, time and catalyst loading (the other 7 slots are zero).
 - **Missing `timestamp`** falls back to the row number. Datasets with more than 10 000 rows and no `timestamp` column will crash (see [§12](#12-troubleshooting)).
 
 ### 6.3 Validate your file before training
@@ -231,14 +245,28 @@ c1ccc(Cl)cc1,c1ccc(-c2ccccc2)cc1,110,24,5,48.3
 
 ```python
 import pandas as pd
-from rdkit import Chem
+from src.data.dataset import detect_reagent_roles, invalid_smiles_columns
 
 df = pd.read_csv("my_reactions.csv")
-bad = df[df.apply(lambda r: Chem.MolFromSmiles(r.reactant_smiles) is None
-                            or Chem.MolFromSmiles(r.product_smiles) is None, axis=1)]
-print(f"{len(bad)} invalid rows")
-print(bad[["reactant_smiles", "product_smiles"]])
+bad = df.apply(lambda r: invalid_smiles_columns(r, detect_reagent_roles(df)), axis=1)
+print(df[bad.apply(len) > 0].assign(bad_columns=bad))
 ```
+
+It's also worth checking that each product really is the coupling product of its reactants. A mismatch usually means a copy-paste error in the spreadsheet:
+
+```python
+from src.data.dataset import suzuki_product
+
+def matches(r):
+    try:
+        return suzuki_product(r.reactant_smiles, r.boronic_acid_smiles) == r.product_smiles
+    except ValueError:
+        return False  # not a recognisable aryl (pseudo)halide + aryl boron pair
+
+print(df[~df.apply(matches, axis=1)])
+```
+
+`suzuki_product` returns RDKit's canonical SMILES, so compare against canonical SMILES. Convert yours with `Chem.MolToSmiles(Chem.MolFromSmiles(s))` first if needed.
 
 ### 6.4 No data yet? Generate a synthetic set
 
@@ -247,7 +275,14 @@ from src.data.dataset import generate_synthetic_dataset
 generate_synthetic_dataset(num_samples=5760, output_path="synthetic.csv")
 ```
 
-This creates rule-based fake reactions (iodide > bromide > chloride, small bonuses for higher temperature and longer time, plus random noise). It's useful for checking that your setup works. **It isn't real chemistry.** Don't draw scientific conclusions from a model trained on it.
+This creates rule-based reactions with every column filled in. Each product is computed from its reactants with an RDKit reaction template (`suzuki_product`), so 2-bromopyridine + phenylboronic acid gives 2-phenylpyridine. Yields follow simple invented rules in the direction of textbook trends:
+
+- leaving group: I > OTf ≈ Br ≫ Cl;
+- aryl chlorides react well only with bulky, electron-rich phosphines (PCy₃, P(tBu)₃, SPhos, XPhos);
+- without a base there is almost no product, and Et₃N is a poor base here;
+- small solvent, temperature and time effects, plus random noise (5 yield points by default).
+
+It's useful for checking that your setup works and that the model picks up condition effects. **The yield rules are invented, not fitted to experiments.** Don't draw chemical conclusions from a model trained on it. For real data, see [§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset).
 
 ---
 
@@ -275,29 +310,18 @@ What the script does:
 5. Reloads the best model and **calibrates its uncertainty** on the validation set: it fits one scale factor that makes the predicted error bars match the errors the model actually makes, and stores it in the checkpoint ([§8.1](#81-uncertainty-calibration)).
 6. Reports scores on the held-out test set, including how well the uncertainty is calibrated there before and after scaling.
 
-Excerpt from a real run on 2 000 synthetic reactions (CPU, about 2 minutes):
+Excerpt from the benchmark run in [§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset) (4,032 real reactions, 4-core CPU, about an hour). The start of the log shows which reagent columns were picked up:
 
 ```
-Split: 1400 train, 300 val, 300 test
-Model parameters: 1,028,873
+Reagents encoded: boronic_acid, ligand, base, solvent
+Split: 3629 train, 403 val, 0 test
+Model parameters: 1,160,969
 ...
-Epoch 26/40
-Val R²: 0.4830, RMSE: 9.60%, MAE: 7.89%
-Early stopping at epoch 26
-============================================================
-FINAL TEST EVALUATION
-============================================================
-Test R²: 0.3370
-Test RMSE: 10.74%
-Test MAE: 8.65%
-
-Uncertainty calibration (scale 0.375, fitted on validation set)
-Test reactions within ±1 / ±2 std (ideal ≈ 68% / 95%):
-  before: 99% / 100%
-  after:  61% / 91%
+Epoch 100/100
+Val R²: 0.8409, RMSE: 11.30%, MAE: 7.69%
 ```
 
-The synthetic generator adds random noise with a standard deviation of 10 yield points, so an RMSE near 10 % is about as good as any model can do on that data. Don't compare these numbers with the paper's.
+That run used `--test_fraction 0` because the benchmark has its own test file. With the default `--test_fraction 0.15`, the log ends with test-set scores and the uncertainty coverage before and after calibration ([§8.1](#81-uncertainty-calibration)).
 
 **Command-line options**
 
@@ -316,6 +340,9 @@ The synthetic generator adds random noise with a standard deviation of 10 yield 
 | `--dropout` | 0.2 | Dropout rate |
 | `--evidential_lambda` | 0.01 | Weight of the uncertainty regulariser in the loss |
 | `--no_temporal_memory` | off | Ignore the `timestamp` column (disables the GRU memory) |
+| `--no_reagents` | off | Ignore the boron partner / ligand / base / solvent columns |
+| `--val_fraction` | 0.15 | Share of the data used for validation (early stopping and uncertainty calibration) |
+| `--test_fraction` | 0.15 | Share held out for the final test report. Set to 0 when you have a separate test file to score with `evaluate.py`. |
 | `--num_workers` | 0 | Background processes for data loading |
 | `--seed` | 42 | Random seed for weights and the data split |
 
@@ -340,7 +367,7 @@ python scripts/predict.py \
 | `uncertainty_std` | Calibrated predictive standard deviation, in percentage points. A reaction predicted at 70 % with `uncertainty_std` 8 is a "70 ± 8 %" prediction: about 2 in 3 such reactions should land within that range ([§8.1](#81-uncertainty-calibration)). |
 | `epistemic_var` | Model uncertainty (variance, 0–1 scale). Highest for reactions unlike the training data. Use it to choose experiments. |
 | `aleatoric_var` | Expected data noise (variance, 0–1 scale) |
-| `status` | `ok`, or why the row couldn't be predicted (for example `invalid SMILES`). Such rows have empty prediction columns. |
+| `status` | `ok`, or why the row couldn't be predicted, naming the column (for example `invalid SMILES: ligand_smiles`). Such rows have empty prediction columns. |
 
 To rank candidate conditions, sort by `predicted_yield`. To choose the most informative next experiments, sort by `epistemic_var`.
 
@@ -358,21 +385,21 @@ python scripts/evaluate.py \
 
 `--output_csv` (per-reaction predictions plus `abs_error`) and `--plot` (a predicted-vs-true scatter plot coloured by uncertainty) are optional.
 
-Example output, from a model trained on 2 000 synthetic reactions and scored on 1 000 different ones:
+Example output, from the [§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset) benchmark (1,728 real reactions the model never saw):
 
 ```
-Reactions scored: 1000
-R²:   0.4279
-RMSE: 9.76%
-MAE:  7.82%
-ECE:  0.0213
-Uncertainty calibration: scale 0.375 (fitted on the validation set during training)
+Reactions scored: 1728
+R²:   0.8347
+RMSE: 11.31%
+MAE:  7.65%
+ECE:  0.0202
+Uncertainty calibration: scale 0.411 (fitted on the validation set during training)
 Uncertainty coverage (ideal for a calibrated Gaussian: 68% / 95%):
-  true yield within ±1 std: 67%
-  true yield within ±2 std: 96%
+  true yield within ±1 std: 74%
+  true yield within ±2 std: 95%
 ```
 
-**How to read the coverage lines.** If the uncertainty is well calibrated, about 68 % of true yields fall within ±1 standard deviation of the prediction, and 95 % within ±2. The run above is close to both. Much more than 68 % means the error bars are too wide; well under 68 % means the model is overconfident. Calibration is fitted on your training data's validation split, so it can drift on chemistry unlike that data. Check coverage on held-out data before quoting `uncertainty_std` as an error bar.
+**How to read the coverage lines.** If the uncertainty is well calibrated, about 68 % of true yields fall within ±1 standard deviation of the prediction, and 95 % within ±2. The run above is close to both: slightly more than 68 % within ±1 std means its error bars are a little wide. Much more than 68 % means the error bars are too wide; well under 68 % means the model is overconfident. Calibration is fitted on your training data's validation split, so it can drift on chemistry unlike that data. Check coverage on held-out data before quoting `uncertainty_std` as an error bar.
 
 **Don't evaluate on your training CSV.** `scripts/train.py` already reports scores on its own held-out test split. Running `evaluate.py` on the full training file mixes in reactions the model has seen, which inflates the scores.
 
@@ -449,6 +476,48 @@ for epoch in range(50):
 **Choose a split that matches your question.** The default random split overestimates how well the model generalises to *new* substrates or ligands, because near-identical reactions end up in both training and test sets. If you want to predict unseen chemistry, hold out whole substrates or ligands, using a custom split as in [§7.5](#75-train-from-python), and then score the held-out group with `scripts/evaluate.py`.
 
 
+### 7.7 Benchmark on real data: the Perera et al. Suzuki dataset
+
+The standard public benchmark for Suzuki-Miyaura yield prediction is the 5,760-reaction high-throughput screen of Perera et al. (*Science* 2018). It combines 7 electrophile/boron-partner pairings on a quinoline–indazole coupling with 12 ligand options (including none), 8 base options (including none) and 4 solvents, and records the yield of one product. Most of the variation in yield comes from the conditions, so a model that can't see the ligand, base and solvent can't do well on it.
+
+`scripts/prepare_suzuki_dataset.py` downloads the paper's supplementary data and converts it to ReactionForge's CSV format. The data isn't redistributed with ReactionForge. It also writes the standard random splits from the [rxn_yields](https://github.com/rxn4chemistry/rxn_yields) repository: in each split file, the first 70 % of reactions are for training and the remaining 30 % for testing.
+
+```bash
+# 1. Download and convert split 0
+python scripts/prepare_suzuki_dataset.py --split 0 --output_dir data/suzuki_split0
+
+# 2. Train on the 70 % (10 % of it is held back for early stopping and calibration)
+python scripts/train.py --data_path data/suzuki_split0/train.csv \
+    --output_dir checkpoints/suzuki_split0 \
+    --epochs 100 --patience 15 --no_temporal_memory --test_fraction 0 --val_fraction 0.1
+
+# 3. Score on the untouched 30 %
+python scripts/evaluate.py --checkpoint checkpoints/suzuki_split0/best_model.pt \
+    --data_path data/suzuki_split0/test.csv --plot parity.png
+```
+
+Notes:
+
+- `--no_temporal_memory` is used because this dataset has no meaningful reaction order. Without a `timestamp` column the model would otherwise read the row number as a timestamp.
+- Add `--no_reagents` in step 2 to train the electrophile/product-only model, to measure how much the reagent encoding contributes.
+- Training takes roughly an hour on a 4-core CPU. A GPU is much faster.
+- To compare with published results, repeat for splits 0–9 and report the mean and standard deviation. A single split is noisy.
+
+**Results on split 0** (one run; 4,032 training reactions, of which 403 were used for validation; scored on the 1,728 test reactions):
+
+| Model | R² | RMSE (yield %) | MAE (yield %) | Within ±1 / ±2 std |
+|---|---|---|---|---|
+| With boron partner, ligand, base, solvent | **0.835** | **11.3** | **7.7** | 74 % / 95 % |
+| Electrophile + product only (`--no_reagents`) | 0.177 | 25.2 | 20.9 | 63 % / 98 % |
+
+How to read these numbers:
+
+- **The reagents are what make the model work here.** Without them, R² drops from 0.84 to 0.18. That's expected: in this dataset most of the variation in yield comes from the choice of ligand, base and solvent.
+- **One split, one seed.** Published results on this dataset are means over the 10 standard splits. These are a single split and could move by a few hundredths of R² on another. Run all 10 before comparing with other methods.
+- **Training hit the 100-epoch limit** while validation R² was still slowly improving (best checkpoint in the last few epochs), so a longer run may do slightly better.
+- **Weak spot: failed reactions in the reversed coupling.** 85 test reactions (5 %) gave essentially no product. On 30 of them the model predicted more than 20 % yield, and all 30 are the reversed orientation (indazole bromide + quinoline boron reagent, 1e–1g in the paper). Across the board, those reversed-orientation reactions have about twice the error of the others (MAE 11.9 vs 6.5). Be most sceptical of predictions for that pairing.
+- **Unclipped outputs.** 4 test predictions were slightly above 100 %, because outputs aren't clipped.
+
 ---
 
 ## 8. Understanding the Model's Output
@@ -473,9 +542,9 @@ for epoch in range(50):
 
 ### 8.1 Uncertainty calibration
 
-The model's raw uncertainty is usually the wrong size. On the synthetic data in this guide the raw error bars were about 2.7× too wide: 99 % of true yields fell within ±1 standard deviation, where 68 % is expected. The *ranking* (which reactions are more uncertain than others) is still useful, but the numbers can't be read as error bars.
+The model's raw uncertainty is usually the wrong size. On the Perera et al. benchmark ([§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset)) the raw error bars were about 2.4× too wide: 97 % of true test yields fell within ±1 standard deviation, where 68 % is expected. The *ranking* (which reactions are more uncertain than others) is still useful, but the numbers can't be read as error bars.
 
-`scripts/train.py` fixes the size with **temperature scaling**: after training it finds the single factor `s` that best fits the predicted standard deviations to the validation-set errors, and saves it in the checkpoint as `uncertainty_scale`. Every prediction's standard deviation is then multiplied by `s` (variances by `s²`). On 1 000 held-out synthetic reactions this moved ±1 / ±2 std coverage from 99 % / 100 % to 67 % / 96 % (ideal 68 % / 95 %).
+`scripts/train.py` fixes the size with **temperature scaling**: after training it finds the single factor `s` that best fits the predicted standard deviations to the validation-set errors, and saves it in the checkpoint as `uncertainty_scale`. Every prediction's standard deviation is then multiplied by `s` (variances by `s²`). On the benchmark's 1,728 test reactions, calibration (fitted on the separate validation split, `s` = 0.411) moved ±1 / ±2 std coverage from 97 % / 100 % to 74 % / 95 % (ideal 68 % / 95 %). The median error bar went from ±26 to ±11 yield points.
 
 Limitations:
 
@@ -502,8 +571,9 @@ All settings are arguments to the `ReactionForge(...)` constructor. The YAML fil
 | `pooling_ratio` | 0.5 | Fraction of atoms kept by SAG pooling | Currently has **no effect**: the pooling layer is created but never called |
 | `temporal_dim` | 64 | Size of the timestamp encoding | Must be even |
 | `dropout` | 0.2 | Regularisation strength | Increase (0.3–0.5) if validation error rises while training error falls |
+| `reagent_roles` | `()` | Which reagent columns to encode, e.g. `('boronic_acid', 'ligand', 'base', 'solvent')` | `scripts/train.py` sets it from the CSV's columns. Empty reproduces the original reactant/product-only model. |
 
-Model size at the defaults with `node_feat_dim=150` is about 1.03 million parameters.
+Model size at the defaults with `node_feat_dim=150` is about 1.03 million parameters, or about 1.16 million with all four reagent roles.
 
 **Turning features off.** To disable temporal memory, pass `--no_temporal_memory` to `scripts/train.py`, or don't pass `timestamps` to `model(...)`. Cross-attention can't be switched off without editing the code.
 
@@ -581,7 +651,8 @@ If tests fail with `ModuleNotFoundError`, your installation or working directory
 | `ModuleNotFoundError: No module named 'torch'` / `'rdkit'` | Dependencies not installed in the active environment | Activate your venv or conda env, then re-run [§4.2](#42-install-with-pip-recommended) |
 | `mat1 and mat2 shapes cannot be multiplied (…x150 and 154x128)` or `…and 32x128` | `node_feat_dim` doesn't match the data | Use `node_feat_dim=150` |
 | `TypeError: forward() missing 2 required positional arguments` | Calling `model(batch_dict)` with the whole batch | Pass the parts: `model(batch['reactant'], batch['product'], batch['conditions'])`, or use `ReactionForgeTrainer` |
-| `⚠️ Skipping N of M rows with invalid … SMILES` | Unparseable SMILES in the CSV | Not an error, but inspect those rows ([§6.3](#63-validate-your-file-before-training)) |
+| `⚠️ Skipping N of M rows with invalid SMILES` | Unparseable SMILES in a reactant, product or reagent column | Not an error, but inspect those rows ([§6.3](#63-validate-your-file-before-training)) |
+| Predictions ignore your ligand / base column | The model was trained without it (`Reagents encoded: none` in the training log), or the column name differs | Use the exact names in [§6.1](#61-file-format) and retrain |
 | `IndexError: index … out of bounds` in `SinusoidalTemporalEncoding`, or `Timestamps must be in [0, 10000)` | A `timestamp` (or, with no `timestamp` column, the row number) ≥ 10 000 | Rescale timestamps below 10 000, or split the CSV into files of under 10 000 rows |
 | `… has no 'model_config'` | Checkpoint written before `scripts/train.py` was fixed | Retrain, or rebuild `ReactionForge(...)` with the original arguments and call `load_state_dict` |
 | `Input already has output column(s) …` | The input CSV is an earlier `predict.py` output | Drop the old prediction columns, or predict from the original file |

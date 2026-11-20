@@ -31,7 +31,7 @@ def test_predict_dataframe_keeps_rows_aligned(model):
     out = predict_dataframe(model, df)
 
     assert list(out.index) == [10, 20, 30]
-    assert list(out['status']) == ['ok', 'invalid SMILES', 'ok']
+    assert list(out['status']) == ['ok', 'invalid SMILES: reactant_smiles', 'ok']
     assert out.loc[[10, 30], 'predicted_yield'].notna().all()
     assert out.loc[20, ['predicted_yield', 'uncertainty_std']].isna().all()
     assert (out.loc[[10, 30], 'uncertainty_std'] > 0).all()
@@ -103,3 +103,24 @@ def test_load_model_rejects_checkpoint_without_config(tmp_path, model):
     torch.save({'model_state_dict': model.state_dict()}, path)
     with pytest.raises(ValueError, match='model_config'):
         load_model(str(path))
+
+
+def test_predict_dataframe_with_reagents():
+    """A model trained with reagents reads them, reports a bad reagent SMILES
+    by column, and treats a reagent column missing from the input as absent."""
+    torch.manual_seed(0)
+    roles = ('boronic_acid', 'ligand', 'base')
+    model = ReactionForge(**CONFIG, reagent_roles=roles).eval()
+    df = pd.DataFrame({
+        'reactant_smiles': ['c1ccc(Cl)cc1', 'c1ccc(Cl)cc1', 'c1ccc(Cl)cc1'],
+        'product_smiles': [BIPHENYL] * 3,
+        'boronic_acid_smiles': ['OB(O)c1ccccc1'] * 3,
+        'ligand_smiles': ['C1CCC(P(C2CCCCC2)C2CCCCC2)CC1', None, 'notasmiles'],
+        # no base_smiles column at all
+    })
+
+    out = predict_dataframe(model, df, use_timestamps=False)
+
+    assert list(out['status']) == ['ok', 'ok', 'invalid SMILES: ligand_smiles']
+    # PCy3 vs no ligand must change the prediction
+    assert out.loc[0, 'predicted_yield'] != pytest.approx(out.loc[1, 'predicted_yield'])

@@ -16,7 +16,7 @@ import torch
 from rdkit import Chem, RDLogger
 from torch_geometric.loader import DataLoader
 
-from src.data.dataset import SuzukiMiyauraDataset
+from src.data.dataset import SuzukiMiyauraDataset, invalid_smiles_columns, reagent_inputs
 from src.models.reactionforge import ReactionForge
 
 # Upper bound of SinusoidalTemporalEncoding's lookup table
@@ -53,10 +53,6 @@ def load_model(checkpoint_path, device='cpu'):
     return model, ckpt.get('use_temporal_memory', True)
 
 
-def _is_valid(smiles):
-    return isinstance(smiles, str) and Chem.MolFromSmiles(smiles) is not None
-
-
 def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu',
                       uncertainty_scale=None):
     """
@@ -85,16 +81,17 @@ def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu
         if col not in df.columns:
             raise ValueError(f"Input is missing required column '{col}'")
 
+    roles = getattr(model, 'reagent_roles', ())
     out = pd.DataFrame(index=df.index, columns=PREDICTION_COLUMNS, dtype=float)
     out['status'] = 'ok'
 
     RDLogger.DisableLog('rdApp.*')  # invalid SMILES are reported in 'status'
     try:
-        valid = df.apply(lambda r: _is_valid(r['reactant_smiles'])
-                         and _is_valid(r['product_smiles']), axis=1)
+        bad = df.apply(lambda r: invalid_smiles_columns(r, roles), axis=1)
     finally:
         RDLogger.EnableLog('rdApp.*')
-    out.loc[~valid, 'status'] = 'invalid SMILES'
+    valid = bad.apply(len) == 0
+    out.loc[~valid, 'status'] = bad[~valid].apply(lambda cols: 'invalid SMILES: ' + ', '.join(cols))
 
     good = df[valid].reset_index(drop=True)
     if len(good) == 0:
@@ -110,14 +107,15 @@ def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu
                 f"row number is used, so split inputs larger than {MAX_TIMESTAMP} "
                 f"rows into smaller files.")
 
-    loader = DataLoader(SuzukiMiyauraDataset(good), batch_size=batch_size)
+    loader = DataLoader(SuzukiMiyauraDataset(good, reagent_roles=roles), batch_size=batch_size)
     mean, epi, ale = [], [], []
     model.eval()
     with torch.no_grad():
         for batch in loader:
             batch = {k: v.to(device) if hasattr(v, 'to') else v for k, v in batch.items()}
             res = model(batch['reactant'], batch['product'], batch['conditions'],
-                        batch['timestamp'] if use_timestamps else None)
+                        batch['timestamp'] if use_timestamps else None,
+                        reagents=reagent_inputs(batch, roles))
             mean.append(res['yield_mean'].view(-1).cpu())
             epi.append(res['epistemic_uncertainty'].view(-1).cpu())
             ale.append(res['aleatoric_uncertainty'].view(-1).cpu())

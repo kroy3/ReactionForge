@@ -21,7 +21,7 @@ Load a trained checkpoint and predict a table of reactions. These are the functi
 
 ```{eval-rst}
 .. automodule:: src.data.dataset
-   :members: SuzukiMiyauraDataset, smiles_to_graph, extract_reaction_conditions, generate_synthetic_dataset
+   :members: SuzukiMiyauraDataset, REAGENT_ROLES, reagent_inputs, invalid_smiles_columns, detect_reagent_roles, suzuki_product, smiles_to_graph, extract_reaction_conditions, generate_synthetic_dataset
 ```
 
 ```{eval-rst}

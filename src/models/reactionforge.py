@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv, SAGPooling, global_mean_pool, global_add_pool
 from torch_geometric.data import Data, Batch
 import math
-from typing import Optional, Tuple, List
+from typing import Dict, Optional, Sequence, Tuple, List
 
 class SinusoidalTemporalEncoding(nn.Module):
     """
@@ -249,10 +249,22 @@ class ReactionForge(nn.Module):
                  num_heads: int = 8,
                  pooling_ratio: float = 0.5,
                  temporal_dim: int = 64,
-                 dropout: float = 0.2):
+                 dropout: float = 0.2,
+                 reagent_roles: Sequence[str] = ()):
+        """
+        Args:
+            reagent_roles: names of extra reaction components to encode, e.g.
+                ``('boronic_acid', 'ligand', 'base', 'solvent')``. Each is a
+                molecular graph encoded with the same WLN encoder as the
+                reactant, then a role-specific projection; an absent component
+                (no ligand, say) uses a learned "absent" embedding. Empty (the
+                default) reproduces the original reactant/product-only model,
+                so older checkpoints load unchanged.
+        """
         super().__init__()
         
         self.hidden_dim = hidden_dim
+        self.reagent_roles = tuple(reagent_roles)
         
         # Input encoding
         self.atom_encoder = nn.Sequential(
@@ -290,9 +302,20 @@ class ReactionForge(nn.Module):
         # Temporal memory
         self.temporal_memory = TemporalMemory(hidden_dim + temporal_dim, hidden_dim)
         
+        # Reagent encoders (only created when used, so reagent-free models
+        # keep the original parameter set)
+        if self.reagent_roles:
+            self.reagent_proj = nn.ModuleDict({
+                role: nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU())
+                for role in self.reagent_roles
+            })
+            self.reagent_absent = nn.ParameterDict({
+                role: nn.Parameter(torch.zeros(hidden_dim)) for role in self.reagent_roles
+            })
+
         # Fusion layer
         self.fusion = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * (3 + len(self.reagent_roles)), hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim)
@@ -339,7 +362,8 @@ class ReactionForge(nn.Module):
                 product_batch: Batch,
                 conditions: torch.Tensor,
                 timestamps: Optional[torch.Tensor] = None,
-                h_prev: Optional[torch.Tensor] = None) -> dict:
+                h_prev: Optional[torch.Tensor] = None,
+                reagents: Optional[Dict[str, Tuple[Batch, torch.Tensor]]] = None) -> dict:
         """
         Forward pass through ReactionForge.
         
@@ -349,6 +373,10 @@ class ReactionForge(nn.Module):
             conditions: (batch, condition_dim) reaction conditions
             timestamps: (batch,) reaction sequence timestamps
             h_prev: Previous temporal memory state
+            reagents: ``{role: (batched graphs, presence mask of shape (batch,))}``
+                for the roles in ``self.reagent_roles`` (see
+                ``src.data.dataset.reagent_inputs``). Missing roles, or
+                ``None``, are treated as absent.
             
         Returns:
             Dictionary containing:
@@ -391,8 +419,24 @@ class ReactionForge(nn.Module):
             memory_repr = cross_attn
             h_new = None
         
+        # Reagents (boron partner, ligand, base, solvent, ...)
+        reagent_reprs = []
+        for role in self.reagent_roles:
+            absent = self.reagent_absent[role].expand(batch_size, -1)
+            if reagents is None or role not in reagents:
+                reagent_reprs.append(absent)
+                continue
+            graphs, present = reagents[role]
+            x = self.encode_graph(graphs)
+            # size=batch_size keeps one row per reaction even when trailing
+            # reactions have no molecule for this role
+            pooled = global_mean_pool(x, graphs.batch, size=batch_size)
+            present = present.view(-1, 1).to(pooled.dtype)
+            reagent_reprs.append(present * self.reagent_proj[role](pooled)
+                                 + (1 - present) * absent)
+
         # Fusion
-        fused = torch.cat([reactant_attn, memory_repr, cond_repr], dim=-1)
+        fused = torch.cat([reactant_attn, memory_repr, cond_repr] + reagent_reprs, dim=-1)
         final_repr = self.fusion(fused)
         
         # Multi-task predictions
