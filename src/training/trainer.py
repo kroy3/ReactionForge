@@ -13,6 +13,7 @@ Batches are the dicts produced by ``SuzukiMiyauraDataset`` and collated by
 import torch
 from tqdm import tqdm
 
+from src.data.dataset import reagent_inputs
 from src.models.reactionforge import evidential_loss
 from src.training.metrics import calculate_metrics
 
@@ -47,7 +48,8 @@ class ReactionForgeTrainer:
 
         timestamps = batch['timestamp'] if self.use_timestamps else None
         output = self.model(batch['reactant'], batch['product'],
-                            batch['conditions'], timestamps)
+                            batch['conditions'], timestamps,
+                            reagents=reagent_inputs(batch, self.model.reagent_roles))
 
         gamma, nu, alpha, beta = output['yield_params']
         target = batch['yield'].view(-1, 1)

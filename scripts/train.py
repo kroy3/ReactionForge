@@ -52,6 +52,13 @@ def parse_args():
     parser.add_argument('--no_temporal_memory', action='store_true',
                         help='Do not feed reaction timestamps to the model')
     parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--val_fraction', type=float, default=0.15,
+                        help='Share of the data for validation (early stopping, calibration)')
+    parser.add_argument('--test_fraction', type=float, default=0.15,
+                        help='Share held out for the final test report; 0 to train on the rest '
+                             'and score a separate test file with scripts/evaluate.py')
+    parser.add_argument('--no_reagents', action='store_true',
+                        help='Ignore boronic_acid/ligand/base/solvent columns even if present')
     parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args()
 
@@ -70,7 +77,10 @@ def main():
 
     # Load dataset
     print(f"Loading dataset from {args.data_path}...")
-    dataset = SuzukiMiyauraDataset(args.data_path)
+    dataset = SuzukiMiyauraDataset(args.data_path,
+                                   reagent_roles=() if args.no_reagents else None)
+    print("Reagents encoded: " + (', '.join(dataset.reagent_roles) or
+                                  "none (no boronic_acid/ligand/base/solvent columns)"))
     if len(dataset) < 3:
         sys.exit(f"Need at least 3 valid reactions to split, found {len(dataset)}.")
 
@@ -80,10 +90,13 @@ def main():
     edge_feat_dim = sample['reactant'].edge_attr.shape[1]
     condition_dim = sample['conditions'].shape[0]
 
-    # Split dataset (70 / 15 / 15), reproducible via --seed
-    train_size = int(0.7 * len(dataset))
-    val_size = max(1, int(0.15 * len(dataset)))
-    test_size = len(dataset) - train_size - val_size
+    # Split dataset (default 70 / 15 / 15), reproducible via --seed
+    if not (0 < args.val_fraction < 1 and 0 <= args.test_fraction < 1
+            and args.val_fraction + args.test_fraction < 1):
+        sys.exit("--val_fraction and --test_fraction must be in [0, 1) and sum to < 1")
+    val_size = max(1, int(args.val_fraction * len(dataset)))
+    test_size = int(args.test_fraction * len(dataset))
+    train_size = len(dataset) - val_size - test_size
 
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size, test_size],
@@ -109,6 +122,7 @@ def main():
         num_wln_layers=args.num_wln_layers,
         num_heads=args.num_heads,
         dropout=args.dropout,
+        reagent_roles=dataset.reagent_roles,
     )
     model = ReactionForge(**model_config)
 
@@ -179,7 +193,8 @@ def main():
     torch.save(checkpoint_data, best_path)
 
     if test_size == 0:
-        print("Test set is empty (dataset too small); skipping test evaluation.")
+        print("No test split (--test_fraction 0 or dataset too small); "
+              "score a held-out file with scripts/evaluate.py.")
     else:
         test_metrics = trainer.evaluate(test_loader)
         print(f"Test R²: {test_metrics['r2']:.4f}")
