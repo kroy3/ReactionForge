@@ -62,28 +62,40 @@ pip install torch-geometric torch-scatter torch-sparse -f https://data.pyg.org/w
 
 ### Quick Prediction
 
+No pretrained weights ship with this repository, so first train a model (see [Training Your Own Model](#-training-your-own-model)). Then:
+
+```bash
+# Score a CSV of candidate reactions (reactant_smiles, product_smiles, conditions)
+python scripts/predict.py \
+    --checkpoint checkpoints/experiment_001/best_model.pt \
+    --input_csv candidates.csv \
+    --output_csv predictions.csv
+```
+
+Or from Python:
+
 ```python
-from src.models.reactionforge import ReactionForge
-from src.data.dataset import smiles_to_graph
 import torch
+import pandas as pd
+from torch_geometric.data import Batch
+from src.inference import load_model
+from src.data.dataset import smiles_to_graph, extract_reaction_conditions
 
-# Load pretrained model
-model = ReactionForge.load_from_checkpoint('checkpoints/reactionforge_best.pt')
-model.eval()
+model, _ = load_model('checkpoints/experiment_001/best_model.pt')
 
-# Prepare reaction
-reactant = smiles_to_graph('c1ccc(Br)cc1')  # Bromobenzene
-product = smiles_to_graph('c1ccc(-c2ccccc2)cc1')  # Biphenyl
-conditions = torch.tensor([[90.0, 12.0, 5.0, 0, 0, 0, 0, 0, 0, 0]])  # T, time, cat%, ...
+reactant = Batch.from_data_list([smiles_to_graph('c1ccc(Br)cc1')])        # Bromobenzene
+product = Batch.from_data_list([smiles_to_graph('c1ccc(-c2ccccc2)cc1')])   # Biphenyl
+conditions = extract_reaction_conditions(
+    pd.Series({'temperature': 90, 'time': 12, 'catalyst_loading': 5})).unsqueeze(0)
 
-# Predict
 with torch.no_grad():
     output = model(reactant, product, conditions)
-    
+
 print(f"Predicted yield: {output['yield_mean'].item()*100:.1f}%")
-print(f"Uncertainty: ±{output['uncertainty'].item()*100:.1f}%")
-print(f"Confidence: {1 / output['uncertainty'].item():.2f}")
+print(f"Uncertainty (std): ±{output['uncertainty'].sqrt().item()*100:.1f}%")
 ```
+
+See the [User Guide](docs/USER_GUIDE.md#8-understanding-the-models-output) for how to interpret the uncertainty.
 
 ---
 
@@ -104,9 +116,10 @@ ReactionForge/
 │   │   ├── trainer.py             # Training loop with evidential loss
 │   │   ├── callbacks.py           # Early stopping, checkpointing
 │   │   └── metrics.py             # Evaluation metrics
-│   └── utils/
-│       ├── visualization.py       # Plotting utilities
-│       └── uncertainty.py         # Uncertainty calibration
+│   ├── utils/
+│   │   ├── visualization.py       # Plotting utilities
+│   │   └── uncertainty.py         # Uncertainty calibration
+│   └── inference.py               # Load checkpoints, batch prediction
 ├── scripts/
 │   ├── train.py                   # Main training script
 │   ├── evaluate.py                # Evaluation on test set
@@ -224,19 +237,18 @@ python scripts/ablation_study.py \
     --ablate evidential_head
 ```
 
-### Out-of-Distribution Evaluation
+### Evaluating a Trained Model
 
 ```bash
-# Leave-one-ligand-out cross-validation
+# Score a model on held-out reactions (needs a yield column)
 python scripts/evaluate.py \
-    --mode loo_ligand \
-    --checkpoint checkpoints/best_model.pt
-
-# Temporal split (train on old reactions, test on new)
-python scripts/evaluate.py \
-    --mode temporal_split \
-    --split_date "2023-01-01"
+    --checkpoint checkpoints/experiment_001/best_model.pt \
+    --data_path held_out.csv \
+    --output_csv evaluation.csv \
+    --plot parity.png
 ```
+
+Reports R², RMSE, MAE, calibration error and uncertainty coverage. For out-of-distribution testing (for example leave-one-ligand-out), build the held-out CSV yourself so it contains only ligands or substrates absent from the training CSV.
 
 ---
 
