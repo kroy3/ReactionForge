@@ -310,29 +310,18 @@ What the script does:
 5. Reloads the best model and **calibrates its uncertainty** on the validation set: it fits one scale factor that makes the predicted error bars match the errors the model actually makes, and stores it in the checkpoint ([§8.1](#81-uncertainty-calibration)).
 6. Reports scores on the held-out test set, including how well the uncertainty is calibrated there before and after scaling.
 
-Excerpt from a real run on 2 000 synthetic reactions (CPU, about 2 minutes):
+Excerpt from the benchmark run in [§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset) (4,032 real reactions, 4-core CPU, about an hour). The start of the log shows which reagent columns were picked up:
 
 ```
-Split: 1400 train, 300 val, 300 test
-Model parameters: 1,028,873
+Reagents encoded: boronic_acid, ligand, base, solvent
+Split: 3629 train, 403 val, 0 test
+Model parameters: 1,160,969
 ...
-Epoch 26/40
-Val R²: 0.4830, RMSE: 9.60%, MAE: 7.89%
-Early stopping at epoch 26
-============================================================
-FINAL TEST EVALUATION
-============================================================
-Test R²: 0.3370
-Test RMSE: 10.74%
-Test MAE: 8.65%
-
-Uncertainty calibration (scale 0.375, fitted on validation set)
-Test reactions within ±1 / ±2 std (ideal ≈ 68% / 95%):
-  before: 99% / 100%
-  after:  61% / 91%
+Epoch 100/100
+Val R²: 0.8409, RMSE: 11.30%, MAE: 7.69%
 ```
 
-The synthetic generator adds random noise with a standard deviation of 10 yield points, so an RMSE near 10 % is about as good as any model can do on that data. Don't compare these numbers with the paper's.
+That run used `--test_fraction 0` because the benchmark has its own test file. With the default `--test_fraction 0.15`, the log ends with test-set scores and the uncertainty coverage before and after calibration ([§8.1](#81-uncertainty-calibration)).
 
 **Command-line options**
 
@@ -396,21 +385,21 @@ python scripts/evaluate.py \
 
 `--output_csv` (per-reaction predictions plus `abs_error`) and `--plot` (a predicted-vs-true scatter plot coloured by uncertainty) are optional.
 
-Example output, from a model trained on 2 000 synthetic reactions and scored on 1 000 different ones:
+Example output, from the [§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset) benchmark (1,728 real reactions the model never saw):
 
 ```
-Reactions scored: 1000
-R²:   0.4279
-RMSE: 9.76%
-MAE:  7.82%
-ECE:  0.0213
-Uncertainty calibration: scale 0.375 (fitted on the validation set during training)
+Reactions scored: 1728
+R²:   0.8347
+RMSE: 11.31%
+MAE:  7.65%
+ECE:  0.0202
+Uncertainty calibration: scale 0.411 (fitted on the validation set during training)
 Uncertainty coverage (ideal for a calibrated Gaussian: 68% / 95%):
-  true yield within ±1 std: 67%
-  true yield within ±2 std: 96%
+  true yield within ±1 std: 74%
+  true yield within ±2 std: 95%
 ```
 
-**How to read the coverage lines.** If the uncertainty is well calibrated, about 68 % of true yields fall within ±1 standard deviation of the prediction, and 95 % within ±2. The run above is close to both. Much more than 68 % means the error bars are too wide; well under 68 % means the model is overconfident. Calibration is fitted on your training data's validation split, so it can drift on chemistry unlike that data. Check coverage on held-out data before quoting `uncertainty_std` as an error bar.
+**How to read the coverage lines.** If the uncertainty is well calibrated, about 68 % of true yields fall within ±1 standard deviation of the prediction, and 95 % within ±2. The run above is close to both: slightly more than 68 % within ±1 std means its error bars are a little wide. Much more than 68 % means the error bars are too wide; well under 68 % means the model is overconfident. Calibration is fitted on your training data's validation split, so it can drift on chemistry unlike that data. Check coverage on held-out data before quoting `uncertainty_std` as an error bar.
 
 **Don't evaluate on your training CSV.** `scripts/train.py` already reports scores on its own held-out test split. Running `evaluate.py` on the full training file mixes in reactions the model has seen, which inflates the scores.
 
@@ -514,6 +503,21 @@ Notes:
 - Training takes roughly an hour on a 4-core CPU. A GPU is much faster.
 - To compare with published results, repeat for splits 0–9 and report the mean and standard deviation. A single split is noisy.
 
+**Results on split 0** (one run; 4,032 training reactions, of which 403 were used for validation; scored on the 1,728 test reactions):
+
+| Model | R² | RMSE (yield %) | MAE (yield %) | Within ±1 / ±2 std |
+|---|---|---|---|---|
+| With boron partner, ligand, base, solvent | **0.835** | **11.3** | **7.7** | 74 % / 95 % |
+| Electrophile + product only (`--no_reagents`) | 0.177 | 25.2 | 20.9 | 63 % / 98 % |
+
+How to read these numbers:
+
+- **The reagents are what make the model work here.** Without them, R² drops from 0.84 to 0.18. That's expected: in this dataset most of the variation in yield comes from the choice of ligand, base and solvent.
+- **One split, one seed.** Published results on this dataset are means over the 10 standard splits. These are a single split and could move by a few hundredths of R² on another. Run all 10 before comparing with other methods.
+- **Training hit the 100-epoch limit** while validation R² was still slowly improving (best checkpoint in the last few epochs), so a longer run may do slightly better.
+- **Weak spot: failed reactions in the reversed coupling.** 85 test reactions (5 %) gave essentially no product. On 30 of them the model predicted more than 20 % yield, and all 30 are the reversed orientation (indazole bromide + quinoline boron reagent, 1e–1g in the paper). Across the board, those reversed-orientation reactions have about twice the error of the others (MAE 11.9 vs 6.5). Be most sceptical of predictions for that pairing.
+- **Unclipped outputs.** 4 test predictions were slightly above 100 %, because outputs aren't clipped.
+
 ---
 
 ## 8. Understanding the Model's Output
@@ -538,9 +542,9 @@ Notes:
 
 ### 8.1 Uncertainty calibration
 
-The model's raw uncertainty is usually the wrong size. On the synthetic data in this guide the raw error bars were about 2.7× too wide: 99 % of true yields fell within ±1 standard deviation, where 68 % is expected. The *ranking* (which reactions are more uncertain than others) is still useful, but the numbers can't be read as error bars.
+The model's raw uncertainty is usually the wrong size. On the Perera et al. benchmark ([§7.7](#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset)) the raw error bars were about 2.4× too wide: 97 % of true test yields fell within ±1 standard deviation, where 68 % is expected. The *ranking* (which reactions are more uncertain than others) is still useful, but the numbers can't be read as error bars.
 
-`scripts/train.py` fixes the size with **temperature scaling**: after training it finds the single factor `s` that best fits the predicted standard deviations to the validation-set errors, and saves it in the checkpoint as `uncertainty_scale`. Every prediction's standard deviation is then multiplied by `s` (variances by `s²`). On 1 000 held-out synthetic reactions this moved ±1 / ±2 std coverage from 99 % / 100 % to 67 % / 96 % (ideal 68 % / 95 %).
+`scripts/train.py` fixes the size with **temperature scaling**: after training it finds the single factor `s` that best fits the predicted standard deviations to the validation-set errors, and saves it in the checkpoint as `uncertainty_scale`. Every prediction's standard deviation is then multiplied by `s` (variances by `s²`). On the benchmark's 1,728 test reactions, calibration (fitted on the separate validation split, `s` = 0.411) moved ±1 / ±2 std coverage from 97 % / 100 % to 74 % / 95 % (ideal 68 % / 95 %). The median error bar went from ±26 to ±11 yield points.
 
 Limitations:
 

@@ -31,7 +31,18 @@ The model also has a selectivity head and a SAGPool layer, but neither is traine
 
 ### Benchmark
 
-Results on the 5,760-reaction Perera et al. Suzuki-Miyaura dataset are being regenerated with the commands in [Reproducing the Benchmark](#-reproducing-the-benchmark). Earlier figures in this README were not reproducible from this repository and have been removed.
+Measured on the 5,760-reaction high-throughput Suzuki-Miyaura dataset of Perera et al. (*Science* 2018). Standard random split 0 from rxn_yields: trained on 70% of the reactions and scored on the other 30% (1,728 reactions the model never saw).
+
+| Model | R² | RMSE (yield %) | MAE (yield %) | Within ±1σ / ±2σ |
+|---|---|---|---|---|
+| ReactionForge (boron partner, ligand, base, solvent) | **0.835** | **11.3** | **7.7** | 74% / 95% |
+| ReactionForge, electrophile + product only | 0.177 | 25.2 | 20.9 | 63% / 98% |
+
+- **Run conditions:** a single split and seed on CPU, stopped at the 100-epoch limit. Means over all 10 standard splits, as reported in the literature, haven't been run yet.
+- **Calibration:** the uncertainty is calibrated on a validation subset; ideal coverage is 68% / 95%.
+- **Weak spot:** the model is least reliable on failed reactions in the reversed coupling orientation. See the [benchmark notes](https://reactionforge.readthedocs.io/en/latest/USER_GUIDE.html#77-benchmark-on-real-data-the-perera-et-al-suzuki-dataset).
+
+Reproduce it with the commands in [Reproducing the Benchmark](#-reproducing-the-benchmark).
 
 ---
 
