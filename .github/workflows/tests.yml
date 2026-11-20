@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # CPU-only PyTorch keeps the install small; the minimal dependency set
+      # matches docs/USER_GUIDE.md §4.2.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install torch-geometric rdkit pandas numpy scikit-learn tqdm matplotlib seaborn pytest
+
+      - name: Unit tests
+        run: python -m pytest tests -q
+
+      # End-to-end check that the command-line workflow in the README still runs.
+      - name: Smoke test train / predict / evaluate
+        run: |
+          python -c "from src.data.dataset import generate_synthetic_dataset; generate_synthetic_dataset(120, '/tmp/smoke.csv')"
+          python scripts/train.py --data_path /tmp/smoke.csv --output_dir /tmp/ckpt --epochs 2 --batch_size 32
+          python scripts/predict.py --checkpoint /tmp/ckpt/best_model.pt --input_csv /tmp/smoke.csv --output_csv /tmp/preds.csv
+          python scripts/evaluate.py --checkpoint /tmp/ckpt/best_model.pt --data_path /tmp/smoke.csv --plot /tmp/parity.png
+          test -s /tmp/preds.csv && test -s /tmp/parity.png
