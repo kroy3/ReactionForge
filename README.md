@@ -1,10 +1,6 @@
 # ReactionForge: Temporal Graph Network for Reaction Yield Prediction
 
 <p align="center">
-  <img src="figures/logo.png" alt="ReactionForge Logo" width="200"/>
-</p>
-
-<p align="center">
   <strong>State-of-the-art deep learning for chemical reaction yield prediction</strong>
 </p>
 
