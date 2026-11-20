@@ -43,10 +43,16 @@ class EarlyStopping:
 class ModelCheckpoint:
     """Save best model based on validation metric"""
     
-    def __init__(self, filepath, monitor='val_r2', mode='max'):
+    def __init__(self, filepath, monitor='val_r2', mode='max', extra=None):
+        """
+        Args:
+            extra: optional dict saved alongside the weights (e.g. the model's
+                constructor arguments, so the checkpoint can be reloaded)
+        """
         self.filepath = filepath
         self.monitor = monitor
         self.mode = mode
+        self.extra = extra or {}
         self.best_score = None
         
     def __call__(self, model, metrics):
@@ -74,5 +80,6 @@ class ModelCheckpoint:
         torch.save({
             'model_state_dict': model.state_dict(),
             'metrics': metrics,
-            'best_score': self.best_score
+            'best_score': self.best_score,
+            **self.extra,
         }, self.filepath)

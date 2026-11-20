@@ -148,10 +148,10 @@ python scripts/train.py \
     --batch_size 64 \
     --learning_rate 1e-3 \
     --hidden_dim 128 \
-    --num_wln_layers 3 \
-    --use_temporal_memory \
-    --use_cross_attention
+    --num_wln_layers 3
 ```
+
+The best model is saved to `<output_dir>/best_model.pt`. Run `python scripts/train.py --help` for all options, or see the [User Guide](docs/USER_GUIDE.md#71-train-from-the-command-line).
 
 ### Advanced: Hyperparameter Optimization
 
