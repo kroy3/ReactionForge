@@ -225,16 +225,19 @@ class ReactionForge(nn.Module):
     Complete ReactionForge architecture for reaction yield prediction.
     
     Architecture overview:
+
     1. Molecular graph encoding (atoms, bonds, conditions)
     2. Temporal encoding of reaction sequences
     3. WLN message passing (3 layers)
     4. Multi-head self-attention
     5. Cross-attention between reactants/products
-    6. Hierarchical graph pooling (SAGPool)
+    6. Mean pooling to graph level (a SAGPool layer is defined as
+       ``sag_pool`` but not currently applied)
     7. Temporal memory update (GRU)
     8. Multi-task prediction heads:
+
        - Yield (evidential regression)
-       - Selectivity (classification)
+       - Selectivity (classification; untrained unless a loss is added)
        - Uncertainty quantification
     """
     def __init__(self, 

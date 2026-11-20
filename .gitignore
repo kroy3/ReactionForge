@@ -1,0 +1,6 @@
+# Python caches
+__pycache__/
+.pytest_cache/
+
+# Sphinx build output
+docs/_build/

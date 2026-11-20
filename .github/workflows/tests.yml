@@ -37,3 +37,21 @@ jobs:
           python scripts/predict.py --checkpoint /tmp/ckpt/best_model.pt --input_csv /tmp/smoke.csv --output_csv /tmp/preds.csv
           python scripts/evaluate.py --checkpoint /tmp/ckpt/best_model.pt --data_path /tmp/smoke.csv --plot /tmp/parity.png
           test -s /tmp/preds.csv && test -s /tmp/parity.png
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Same build as Read the Docs (.readthedocs.yaml): warnings fail it
+      - name: Build documentation
+        run: |
+          pip install -r docs/requirements.txt
+          sphinx-build -W --keep-going -b html docs docs/_build/html

@@ -1,6 +1,8 @@
 """
 Inference helpers shared by scripts/predict.py and scripts/evaluate.py.
 
+Example::
+
     from src.inference import load_model, predict_dataframe
 
     model, use_timestamps = load_model('checkpoints/best_model.pt')
@@ -69,12 +71,14 @@ def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu
     ``load_model`` attached to the model, or 1.0 if there is none.
 
     Returns:
-        DataFrame with the same index as ``df`` and columns
-          predicted_yield  - yield in percent
-          uncertainty_std  - calibrated predictive standard deviation, percentage points
-          epistemic_var    - calibrated model (epistemic) variance, 0-1 yield scale
-          aleatoric_var    - calibrated data (aleatoric) variance, 0-1 yield scale
-          status           - 'ok' or the reason the row could not be predicted
+        DataFrame with the same index as ``df`` and these columns:
+
+        - ``predicted_yield``: yield in percent
+        - ``uncertainty_std``: calibrated predictive standard deviation, percentage points
+        - ``epistemic_var``: calibrated model (epistemic) variance, 0-1 yield scale
+        - ``aleatoric_var``: calibrated data (aleatoric) variance, 0-1 yield scale
+        - ``status``: ``'ok'`` or the reason the row could not be predicted
+
         Rows that could not be predicted have NaN in the numeric columns.
     """
     for col in ('reactant_smiles', 'product_smiles'):

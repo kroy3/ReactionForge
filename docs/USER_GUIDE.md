@@ -66,7 +66,8 @@ The README describes a full pipeline: command-line training, evaluation, batch p
 | `scripts/evaluate.py` | ✅ Works | Scores a model on labelled data. See [§7.3](#73-evaluate-on-held-out-data). |
 | `scripts/hyperopt.py` | ⚠️ Stub | The objective returns a fixed `0.95` and trains nothing |
 | Pretrained checkpoint (`checkpoints/`) | ❌ Not included | Train your own with `scripts/train.py`. Load it with `src.inference.load_model` ([§7.4](#74-predict-from-python)). |
-| `scripts/run_benchmarks.sh`, `scripts/ablation_study.py`, `docs/*` pages, readthedocs site | ❌ Not in the repository | Referenced in the README only |
+| `scripts/run_benchmarks.sh`, `scripts/ablation_study.py` | ❌ Not in the repository | Referenced in the README only |
+| Documentation site | ✅ Builds | This guide plus an API reference, built by Read the Docs from `docs/` ([§11](#11-running-the-test-suite)) |
 | `configs/*.yaml` | ⚠️ Not read by any code | `ablation.yaml` and `transfer_learning.yaml` contain only comments |
 | Notebooks (`notebooks/`) | ⚠️ Skeletons | Imports and headings only |
 | Unit tests (`tests/`) | ✅ All pass | Also run automatically on GitHub for every pull request. See [§11](#11-running-the-test-suite). |
@@ -179,6 +180,7 @@ ReactionForge/
 ├── configs/                  YAML files (not read by any code)
 ├── notebooks/                Tutorial skeletons
 ├── tests/                    Unit tests
+├── docs/                     This guide, API reference page, Sphinx config (Read the Docs)
 ├── figures/                  Paper figures
 ├── requirements.txt / environment.yml
 └── *.py, models/, training/, utils/   ← duplicate copies of src/ files
@@ -208,7 +210,7 @@ ReactionForge reads a **CSV file with one reaction per row**. Column names must 
 
 Minimal example (`my_reactions.csv`):
 
-```csv
+```text
 reactant_smiles,product_smiles,temperature,time,catalyst_loading,yield
 c1ccc(Br)cc1,c1ccc(-c2ccccc2)cc1,90,12,5,82.5
 c1ccc(I)cc1,c1ccc(-c2ccccc2)cc1,80,6,2,91.0
@@ -556,7 +558,16 @@ All tests should pass:
 28 passed
 ```
 
-The same tests, plus a short train → predict → evaluate run on synthetic data, run automatically on GitHub for every pull request and every push to `main` (`.github/workflows/tests.yml`). A red ❌ next to a pull request means something broke. Open the **Details** link to see which step failed.
+The same tests, plus a short train → predict → evaluate run on synthetic data and a documentation build, run automatically on GitHub for every pull request and every push to `main` (`.github/workflows/tests.yml`). A red ❌ next to a pull request means something broke. Open the **Details** link to see which step failed.
+
+To build the documentation site locally (the same build Read the Docs runs):
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -W -b html docs docs/_build/html   # then open docs/_build/html/index.html
+```
+
+`-W` turns warnings into errors, as Read the Docs does. A malformed docstring in `src/` is enough to fail the build, so check this after editing docstrings.
 
 If tests fail with `ModuleNotFoundError`, your installation or working directory is the problem (see [§12](#12-troubleshooting)).
 
@@ -599,9 +610,9 @@ If tests fail with `ModuleNotFoundError`, your installation or working directory
 
 ## 14. Citation, License, and Support
 
-**License:** MIT. See [`LICENSE`](../LICENSE). You may use, modify, and redistribute the code, including commercially, provided the copyright notice is kept.
+**License:** MIT. See [`LICENSE`](https://github.com/kroy3/ReactionForge/blob/main/LICENSE). You may use, modify, and redistribute the code, including commercially, provided the copyright notice is kept.
 
-**Citation:** if you use ReactionForge in research, cite the accompanying preprint as given in the [README](../README.md#-citation). The DOI there is currently a placeholder.
+**Citation:** if you use ReactionForge in research, cite the accompanying preprint as given in the [README](https://github.com/kroy3/ReactionForge#-citation). The DOI there is currently a placeholder.
 
 **Reporting problems:** open an issue at <https://github.com/kroy3/ReactionForge/issues> and include:
 

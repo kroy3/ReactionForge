@@ -1,0 +1,4 @@
+# Documentation build dependencies (used by Read the Docs; see .readthedocs.yaml)
+sphinx==9.2.0
+myst-parser==5.2.0
+sphinx-rtd-theme==3.1.0
