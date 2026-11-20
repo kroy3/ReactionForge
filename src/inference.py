@@ -30,6 +30,10 @@ def load_model(checkpoint_path, device='cpu'):
 
     Returns:
         (model in eval mode on ``device``, whether it was trained with timestamps)
+
+    The model gets an ``uncertainty_scale`` attribute (the calibration factor
+    stored in the checkpoint, or 1.0). ``predict_dataframe`` applies it; raw
+    ``model(...)`` outputs are uncalibrated.
     """
     ckpt = torch.load(checkpoint_path, map_location=device)
     if 'model_config' not in ckpt:
@@ -40,6 +44,10 @@ def load_model(checkpoint_path, device='cpu'):
     model = ReactionForge(**ckpt['model_config'])
     model.load_state_dict(ckpt['model_state_dict'])
     model.to(device).eval()
+    # Factor fitted by train.py on the validation set; 1.0 (uncalibrated) for
+    # checkpoints written before calibration was added.
+    model.uncertainty_scale = float(ckpt.get('uncertainty_scale', 1.0))
+    model.uncertainty_calibrated = 'uncertainty_scale' in ckpt
     return model, ckpt.get('use_temporal_memory', True)
 
 
@@ -47,7 +55,8 @@ def _is_valid(smiles):
     return isinstance(smiles, str) and Chem.MolFromSmiles(smiles) is not None
 
 
-def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu'):
+def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu',
+                      uncertainty_scale=None):
     """
     Predict yields for every row of ``df``.
 
@@ -55,12 +64,16 @@ def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu
     (``temperature``, ``time``, ``catalyst_loading``) and ``timestamp`` are used
     when present, exactly as in training.
 
+    Uncertainties are multiplied by ``uncertainty_scale`` (standard deviations)
+    or its square (variances). By default this is the calibration factor that
+    ``load_model`` attached to the model, or 1.0 if there is none.
+
     Returns:
         DataFrame with the same index as ``df`` and columns
           predicted_yield  - yield in percent
-          uncertainty_std  - total predictive standard deviation, percentage points
-          epistemic_var    - model (epistemic) variance, 0-1 yield scale
-          aleatoric_var    - data (aleatoric) variance, 0-1 yield scale
+          uncertainty_std  - calibrated predictive standard deviation, percentage points
+          epistemic_var    - calibrated model (epistemic) variance, 0-1 yield scale
+          aleatoric_var    - calibrated data (aleatoric) variance, 0-1 yield scale
           status           - 'ok' or the reason the row could not be predicted
         Rows that could not be predicted have NaN in the numeric columns.
     """
@@ -106,6 +119,9 @@ def predict_dataframe(model, df, use_timestamps=True, batch_size=64, device='cpu
             ale.append(res['aleatoric_uncertainty'].view(-1).cpu())
 
     mean, epi, ale = (torch.cat(t).numpy() for t in (mean, epi, ale))
+    if uncertainty_scale is None:
+        uncertainty_scale = getattr(model, 'uncertainty_scale', 1.0)
+    epi, ale = epi * uncertainty_scale ** 2, ale * uncertainty_scale ** 2
     idx = df.index[valid]
     out.loc[idx, 'predicted_yield'] = mean * 100
     out.loc[idx, 'uncertainty_std'] = np.sqrt(epi + ale) * 100

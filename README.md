@@ -92,10 +92,11 @@ with torch.no_grad():
     output = model(reactant, product, conditions)
 
 print(f"Predicted yield: {output['yield_mean'].item()*100:.1f}%")
-print(f"Uncertainty (std): ±{output['uncertainty'].sqrt().item()*100:.1f}%")
+std = output['uncertainty'].sqrt().item() * model.uncertainty_scale  # calibrated in train.py
+print(f"Uncertainty (std): ±{std*100:.1f}%")
 ```
 
-See the [User Guide](docs/USER_GUIDE.md#8-understanding-the-models-output) for how to interpret the uncertainty.
+See the [User Guide](docs/USER_GUIDE.md#81-uncertainty-calibration) for how the uncertainty is calibrated and how to interpret it.
 
 ---
 

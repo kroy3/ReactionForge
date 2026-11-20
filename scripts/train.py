@@ -29,6 +29,7 @@ from src.models.reactionforge import ReactionForge
 from src.data.dataset import SuzukiMiyauraDataset
 from src.training.trainer import ReactionForgeTrainer
 from src.training.callbacks import EarlyStopping, ModelCheckpoint
+from src.utils.uncertainty import coverage, fit_uncertainty_scale
 
 
 def parse_args():
@@ -169,6 +170,14 @@ def main():
     checkpoint_data = torch.load(best_path, map_location=device)
     model.load_state_dict(checkpoint_data['model_state_dict'])
 
+    # Calibrate uncertainty on the validation set: one factor that rescales the
+    # predicted standard deviations to match the observed errors. The test set
+    # is left untouched so its coverage is an honest check.
+    y_val, p_val, var_val = trainer.collect_predictions(val_loader)
+    scale = fit_uncertainty_scale(y_val, p_val, var_val)
+    checkpoint_data['uncertainty_scale'] = scale
+    torch.save(checkpoint_data, best_path)
+
     if test_size == 0:
         print("Test set is empty (dataset too small); skipping test evaluation.")
     else:
@@ -176,6 +185,14 @@ def main():
         print(f"Test R²: {test_metrics['r2']:.4f}")
         print(f"Test RMSE: {test_metrics['rmse']:.2f}%")
         print(f"Test MAE: {test_metrics['mae']:.2f}%")
+
+        y_t, p_t, var_t = trainer.collect_predictions(test_loader)
+        raw_std = var_t ** 0.5
+        print(f"\nUncertainty calibration (scale {scale:.3f}, fitted on validation set)")
+        print("Test reactions within ±1 / ±2 std (ideal ≈ 68% / 95%):")
+        print(f"  before: {coverage(y_t, p_t, raw_std, 1):.0%} / {coverage(y_t, p_t, raw_std, 2):.0%}")
+        print(f"  after:  {coverage(y_t, p_t, raw_std * scale, 1):.0%} / "
+              f"{coverage(y_t, p_t, raw_std * scale, 2):.0%}")
     print("="*60)
 
     print(f"\n✅ Training complete! Best model saved to {best_path}")

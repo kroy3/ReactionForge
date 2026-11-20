@@ -270,7 +270,8 @@ What the script does:
 2. Splits the data 70 / 15 / 15 into train / validation / test. The split is reproducible for a given `--seed`.
 3. Trains, printing validation R², RMSE and MAE (in yield percentage points) after each epoch.
 4. Saves the best model by validation R² to `<output_dir>/best_model.pt`, and stops early once validation R² hasn't improved for `--patience` epochs.
-5. Reloads the best model and reports its scores on the held-out test set.
+5. Reloads the best model and **calibrates its uncertainty** on the validation set: it fits one scale factor that makes the predicted error bars match the errors the model actually makes, and stores it in the checkpoint ([§8.1](#81-uncertainty-calibration)).
+6. Reports scores on the held-out test set, including how well the uncertainty is calibrated there before and after scaling.
 
 Excerpt from a real run on 2 000 synthetic reactions (CPU, about 2 minutes):
 
@@ -287,6 +288,11 @@ FINAL TEST EVALUATION
 Test R²: 0.3370
 Test RMSE: 10.74%
 Test MAE: 8.65%
+
+Uncertainty calibration (scale 0.375, fitted on validation set)
+Test reactions within ±1 / ±2 std (ideal ≈ 68% / 95%):
+  before: 99% / 100%
+  after:  61% / 91%
 ```
 
 The synthetic generator adds random noise with a standard deviation of 10 yield points, so an RMSE near 10 % is about as good as any model can do on that data. Don't compare these numbers with the paper's.
@@ -329,7 +335,7 @@ python scripts/predict.py \
 | Column | Meaning |
 |---|---|
 | `predicted_yield` | Predicted yield, in percent |
-| `uncertainty_std` | Predictive standard deviation, in percentage points. A reaction predicted at 70 % with `uncertainty_std` 8 is a "70 ± 8 %" prediction (before calibration; see [§7.3](#73-evaluate-on-held-out-data)). |
+| `uncertainty_std` | Calibrated predictive standard deviation, in percentage points. A reaction predicted at 70 % with `uncertainty_std` 8 is a "70 ± 8 %" prediction: about 2 in 3 such reactions should land within that range ([§8.1](#81-uncertainty-calibration)). |
 | `epistemic_var` | Model uncertainty (variance, 0–1 scale). Highest for reactions unlike the training data. Use it to choose experiments. |
 | `aleatoric_var` | Expected data noise (variance, 0–1 scale) |
 | `status` | `ok`, or why the row couldn't be predicted (for example `invalid SMILES`). Such rows have empty prediction columns. |
@@ -357,13 +363,14 @@ Reactions scored: 1000
 R²:   0.4279
 RMSE: 9.76%
 MAE:  7.82%
-ECE:  0.1874
+ECE:  0.0213
+Uncertainty calibration: scale 0.375 (fitted on the validation set during training)
 Uncertainty coverage (ideal for a calibrated Gaussian: 68% / 95%):
-  true yield within ±1 std: 99%
-  true yield within ±2 std: 100%
+  true yield within ±1 std: 67%
+  true yield within ±2 std: 96%
 ```
 
-**How to read the coverage lines.** If the uncertainty were well calibrated, about 68 % of true yields would fall within ±1 standard deviation of the prediction, and 95 % within ±2. In the run above 99 % fall within ±1, so this model's `uncertainty_std` is **too large**: it is more accurate than it claims to be. The reverse (well under 68 %) means it is overconfident. Check this on your own data before quoting `uncertainty_std` as an error bar. [§10](#10-evaluation-and-uncertainty-tools) lists the tools for recalibrating it.
+**How to read the coverage lines.** If the uncertainty is well calibrated, about 68 % of true yields fall within ±1 standard deviation of the prediction, and 95 % within ±2. The run above is close to both. Much more than 68 % means the error bars are too wide; well under 68 % means the model is overconfident. Calibration is fitted on your training data's validation split, so it can drift on chemistry unlike that data. Check coverage on held-out data before quoting `uncertainty_std` as an error bar.
 
 **Don't evaluate on your training CSV.** `scripts/train.py` already reports scores on its own held-out test split. Running `evaluate.py` on the full training file mixes in reactions the model has seen, which inflates the scores.
 
@@ -458,9 +465,23 @@ for epoch in range(50):
 
 **How to read the uncertainty values.**
 
-- They're **variances on the 0–1 yield scale**, not ± percentages. As a rough standard deviation in % points, use `sqrt(uncertainty) * 100`. The README's `uncertainty * 100` shorthand is not a standard deviation.
-- Uncalibrated values are mainly useful for **ranking**: which predictions to trust more or less. Before you read them as absolute error bars, calibrate them on a validation set with `src.utils.uncertainty.calibrate_uncertainty` and check them with `reliability_diagram` (see [§10](#10-evaluation-and-uncertainty-tools)).
+- They're **variances on the 0–1 yield scale**, not ± percentages. As a standard deviation in % points, use `sqrt(uncertainty) * 100`.
+- The raw outputs of `model(...)` are **uncalibrated** (see §8.1). `scripts/predict.py`, `scripts/evaluate.py` and `src.inference.predict_dataframe` apply the calibration automatically.
 - High *epistemic* uncertainty is the better signal for "run this experiment next". High *aleatoric* uncertainty means even more data won't make this reaction predictable.
+
+### 8.1 Uncertainty calibration
+
+The model's raw uncertainty is usually the wrong size. On the synthetic data in this guide the raw error bars were about 2.7× too wide: 99 % of true yields fell within ±1 standard deviation, where 68 % is expected. The *ranking* (which reactions are more uncertain than others) is still useful, but the numbers can't be read as error bars.
+
+`scripts/train.py` fixes the size with **temperature scaling**: after training it finds the single factor `s` that best fits the predicted standard deviations to the validation-set errors, and saves it in the checkpoint as `uncertainty_scale`. Every prediction's standard deviation is then multiplied by `s` (variances by `s²`). On 1 000 held-out synthetic reactions this moved ±1 / ±2 std coverage from 99 % / 100 % to 67 % / 96 % (ideal 68 % / 95 %).
+
+Limitations:
+
+- **One factor for all reactions.** It corrects the overall size of the error bars, not their shape. If the model is overconfident on some kinds of reaction and underconfident on others, a single factor can't fix both.
+- **It's fitted to the validation split's chemistry.** On substrates or conditions unlike the training data, the true errors can be larger than the calibrated error bars suggest. That's exactly when the epistemic uncertainty should be high, so treat high-epistemic predictions with extra caution.
+- **Checkpoints trained before calibration was added** have no scale. They load with a scale of 1 (uncalibrated), and `evaluate.py` says so. Retrain to calibrate them.
+
+To calibrate in your own code, use `fit_uncertainty_scale` (§10). If you call `model(...)` directly on a model from `load_model`, multiply `out['uncertainty']` by `model.uncertainty_scale ** 2`.
 
 ---
 
@@ -511,7 +532,9 @@ Then:
 |---|---|---|
 | `calculate_metrics(y_true, y_pred)` | `src.training.metrics` | Returns `{'r2', 'rmse', 'mae'}` on whatever scale you pass. Multiply RMSE/MAE by 100 for % points. |
 | `expected_calibration_error(y_true, y_pred, uncertainty)` | `src.training.metrics` | Single calibration score. Lower is better. |
-| `calibrate_uncertainty(y_true, y_pred, epistemic, aleatoric)` | `src.utils.uncertainty` | Rescales uncertainties to match observed errors |
+| `fit_uncertainty_scale(y_true, y_pred, variance)` | `src.utils.uncertainty` | The calibration factor `s` for standard deviations ([§8.1](#81-uncertainty-calibration)). Fit on validation data only. |
+| `calibrate_uncertainty(y_true, y_pred, epistemic, aleatoric)` | `src.utils.uncertainty` | Applies that factor to epistemic and aleatoric *variances* |
+| `coverage(y_true, y_pred, std, z)` | `src.utils.uncertainty` | Fraction of true values within `z` standard deviations. ≈ 0.68 (z=1) and 0.95 (z=2) when calibrated. |
 | `reliability_diagram(y_true, y_pred, uncertainty)` | `src.utils.uncertainty` | Binned confidence vs. accuracy data for plotting |
 | `uncertainty_based_sampling(epistemic, n)` | `src.utils.uncertainty` | Indices of the `n` most uncertain reactions to run next (active learning) |
 | `plot_predictions(y_true, y_pred, uncertainty, save_path)` | `src.utils.visualization` | Predicted-vs-true scatter plot |
@@ -530,7 +553,7 @@ python -m pytest tests -q
 All tests should pass:
 
 ```
-20 passed
+28 passed
 ```
 
 The same tests, plus a short train → predict → evaluate run on synthetic data, run automatically on GitHub for every pull request and every push to `main` (`.github/workflows/tests.yml`). A red ❌ next to a pull request means something broke. Open the **Details** link to see which step failed.
