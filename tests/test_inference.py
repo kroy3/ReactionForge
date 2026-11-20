@@ -71,6 +71,33 @@ def test_load_model_roundtrip(tmp_path, model):
         assert torch.equal(a, b)
 
 
+def test_predict_dataframe_applies_uncertainty_scale(model):
+    df = pd.DataFrame({'reactant_smiles': ['c1ccc(Br)cc1'], 'product_smiles': [BIPHENYL]})
+
+    raw = predict_dataframe(model, df, uncertainty_scale=1.0)
+    scaled = predict_dataframe(model, df, uncertainty_scale=0.5)
+
+    assert scaled['predicted_yield'].iloc[0] == pytest.approx(raw['predicted_yield'].iloc[0])
+    assert scaled['uncertainty_std'].iloc[0] == pytest.approx(0.5 * raw['uncertainty_std'].iloc[0])
+    assert scaled['epistemic_var'].iloc[0] == pytest.approx(0.25 * raw['epistemic_var'].iloc[0])
+
+
+def test_load_model_reads_uncertainty_scale(tmp_path, model):
+    path = tmp_path / 'calibrated.pt'
+    torch.save({'model_state_dict': model.state_dict(), 'model_config': CONFIG,
+                'uncertainty_scale': 0.4}, path)
+    loaded, _ = load_model(str(path))
+    assert loaded.uncertainty_scale == pytest.approx(0.4)
+    assert loaded.uncertainty_calibrated
+
+    # Checkpoints from before calibration load as uncalibrated (scale 1)
+    old = tmp_path / 'old.pt'
+    torch.save({'model_state_dict': model.state_dict(), 'model_config': CONFIG}, old)
+    loaded, _ = load_model(str(old))
+    assert loaded.uncertainty_scale == 1.0
+    assert not loaded.uncertainty_calibrated
+
+
 def test_load_model_rejects_checkpoint_without_config(tmp_path, model):
     path = tmp_path / 'old.pt'
     torch.save({'model_state_dict': model.state_dict()}, path)

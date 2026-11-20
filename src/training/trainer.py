@@ -74,6 +74,24 @@ class ReactionForgeTrainer:
 
         return total_loss / len(train_loader)
 
+    def collect_predictions(self, loader):
+        """
+        Run the model over ``loader`` without gradients.
+
+        Returns:
+            (y_true, y_pred, variance) NumPy arrays on the 0-1 yield scale, where
+            variance is the total predictive variance (epistemic + aleatoric).
+        """
+        self.model.eval()
+        y_true, y_pred, variance = [], [], []
+        with torch.no_grad():
+            for batch in loader:
+                output, target, _ = self._forward(batch)
+                y_true.append(target.view(-1).cpu())
+                y_pred.append(output['yield_mean'].view(-1).cpu())
+                variance.append(output['uncertainty'].view(-1).cpu())
+        return tuple(torch.cat(t).numpy() for t in (y_true, y_pred, variance))
+
     def evaluate(self, val_loader):
         """
         Evaluate on a validation or test set.

@@ -21,17 +21,12 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np
 import pandas as pd
 import torch
 
 from src.inference import load_model, predict_dataframe
 from src.training.metrics import calculate_metrics, expected_calibration_error
-
-
-def coverage(y_true, y_pred, std, z):
-    """Fraction of reactions whose true yield lies within z standard deviations."""
-    return float(np.mean(np.abs(y_true - y_pred) <= z * std))
+from src.utils.uncertainty import coverage
 
 
 def main():
@@ -91,6 +86,11 @@ def main():
     print(f"RMSE: {m['rmse']:.2f}%")
     print(f"MAE:  {m['mae']:.2f}%")
     print(f"ECE:  {ece:.4f}")
+    scale = getattr(model, 'uncertainty_scale', 1.0)
+    if getattr(model, 'uncertainty_calibrated', False):
+        print(f"Uncertainty calibration: scale {scale:.3f} (fitted on the validation set during training)")
+    else:
+        print("Uncertainty calibration: none (checkpoint predates calibration; retrain to add it)")
     print("Uncertainty coverage (ideal for a calibrated Gaussian: 68% / 95%):")
     print(f"  true yield within ±1 std: {cov1:.0%}")
     print(f"  true yield within ±2 std: {cov2:.0%}")

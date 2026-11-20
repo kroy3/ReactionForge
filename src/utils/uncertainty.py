@@ -5,41 +5,57 @@ Tools for uncertainty quantification and calibration.
 """
 
 import numpy as np
-from scipy.stats import norm
+
+
+def fit_uncertainty_scale(y_true, y_pred, variance):
+    """
+    Fit one factor ``s`` so that the predictive distribution N(y_pred, s^2 * variance)
+    best matches the observed errors (closed-form Gaussian maximum likelihood).
+
+    Fit it on a validation set, never on the data you report results on.
+
+    Args:
+        y_true, y_pred: true and predicted values (same scale)
+        variance: predicted *variance* on that scale, e.g. the model's
+            ``epistemic_uncertainty + aleatoric_uncertainty``
+
+    Returns:
+        float: multiply standard deviations by ``s`` (variances by ``s**2``).
+        s > 1 means the model was overconfident, s < 1 underconfident.
+    """
+    y_true, y_pred, variance = (np.asarray(a, dtype=float).ravel()
+                                for a in (y_true, y_pred, variance))
+    if len(y_true) == 0:
+        raise ValueError("Need at least one prediction to fit an uncertainty scale")
+    variance = np.maximum(variance, 1e-12)
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2 / variance)))
 
 
 def calibrate_uncertainty(y_true, y_pred, epistemic, aleatoric):
     """
-    Calibrate uncertainty estimates using temperature scaling.
-    
+    Rescale epistemic and aleatoric *variances* so that their sum matches the
+    observed errors (temperature scaling; see ``fit_uncertainty_scale``).
+
     Args:
         y_true: True values
         y_pred: Predicted values
-        epistemic: Epistemic uncertainty
-        aleatoric: Aleatoric uncertainty
-        
+        epistemic: Epistemic variance (model output ``epistemic_uncertainty``)
+        aleatoric: Aleatoric variance (model output ``aleatoric_uncertainty``)
+
     Returns:
-        tuple: Calibrated (epistemic, aleatoric)
+        tuple: Calibrated (epistemic, aleatoric) variances
     """
-    # Calculate residuals
-    residuals = np.abs(y_true - y_pred)
-    
-    # Find optimal temperature parameter
-    from scipy.optimize import minimize
-    
-    def objective(temp):
-        total_unc = np.sqrt(epistemic**2 + aleatoric**2) * temp
-        log_likelihood = -np.sum(norm.logpdf(residuals, scale=total_unc))
-        return log_likelihood
-    
-    result = minimize(objective, x0=1.0, bounds=[(0.1, 10.0)])
-    optimal_temp = result.x[0]
-    
-    # Apply temperature scaling
-    epistemic_cal = epistemic * optimal_temp
-    aleatoric_cal = aleatoric * optimal_temp
-    
-    return epistemic_cal, aleatoric_cal
+    epistemic = np.asarray(epistemic, dtype=float)
+    aleatoric = np.asarray(aleatoric, dtype=float)
+    scale = fit_uncertainty_scale(y_true, y_pred, epistemic + aleatoric)
+    return epistemic * scale ** 2, aleatoric * scale ** 2
+
+
+def coverage(y_true, y_pred, std, z=1.0):
+    """Fraction of true values within ``z`` standard deviations of the prediction.
+    For calibrated Gaussian uncertainty this is about 68% (z=1) and 95% (z=2)."""
+    y_true, y_pred, std = (np.asarray(a, dtype=float).ravel() for a in (y_true, y_pred, std))
+    return float(np.mean(np.abs(y_true - y_pred) <= z * std))
 
 
 def uncertainty_based_sampling(epistemic, n_samples):
